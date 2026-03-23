@@ -12,15 +12,16 @@ const SWELL_C_X =  0.500,  SWELL_C_Z = -0.866
 // ─── Wave table shared between GPU and CPU ───
 // [dirX, dirZ, frequency, speed, amplitude, steepness(Q)]
 const WAVES = [
-  [SWELL_A_X, SWELL_A_Z, 0.028, 0.70, 1.10, 0.50],  // primary swell — tall, widely spaced
-  [SWELL_B_X, SWELL_B_Z, 0.058, 1.20, 0.35, 0.38],  // secondary cross-swell
-  [SWELL_C_X, SWELL_C_Z, 0.140, 1.90, 0.09, 0.18],  // chop
+  [SWELL_A_X, SWELL_A_Z, 0.014, 0.55, 2.40, 0.42],   // primary swell — tall, long, sweeping
+  [SWELL_B_X, SWELL_B_Z, 0.032, 0.90, 0.70, 0.35],   // secondary cross-swell
+  [SWELL_C_X, SWELL_C_Z, 0.085, 1.50, 0.18, 0.20],   // medium chop
+  [SWELL_A_X + 0.2, SWELL_A_Z - 0.1, 0.16, 2.10, 0.06, 0.10], // fine detail
 ] as const
 
-const RIPPLE_FREQ  = 0.32
-const RIPPLE_SPEED = 2.8
-const RIPPLE_AMP   = 0.03
-const RIPPLE_Q     = 0.08
+const RIPPLE_FREQ  = 0.35
+const RIPPLE_SPEED = 2.6
+const RIPPLE_AMP   = 0.025
+const RIPPLE_Q     = 0.06
 
 // ────────────────────────── vertex shader ──────────────────────────
 const vertexShader = `
@@ -34,12 +35,13 @@ const vertexShader = `
   varying vec2  vWorldPos;
   varying float vElevation;
   varying float vFoam;
+  varying float vDepth;
 
   const vec2 swA = vec2(${SWELL_A_X}, ${SWELL_A_Z});
   const vec2 swB = vec2(${SWELL_B_X}, ${SWELL_B_Z});
   const vec2 swC = vec2(${SWELL_C_X}, ${SWELL_C_Z});
+  const vec2 swD = vec2(${(SWELL_A_X + 0.2).toFixed(4)}, ${(SWELL_A_Z - 0.1).toFixed(4)});
 
-  // Accumulate a single Gerstner wave into displacement + tangent frame
   void gerstner(vec2 pos, vec2 dir, float freq, float spd, float amp, float Q,
                 inout vec3 disp, inout vec3 tX, inout vec3 tY) {
     float phase = dot(pos, dir) * freq + uTime * spd;
@@ -71,9 +73,10 @@ const vertexShader = `
     gerstner(wc, swA, ${WAVES[0][2]}, ${WAVES[0][3]}, ${WAVES[0][4]}, ${WAVES[0][5]}, disp, tX, tY);
     gerstner(wc, swB, ${WAVES[1][2]}, ${WAVES[1][3]}, ${WAVES[1][4]}, ${WAVES[1][5]}, disp, tX, tY);
     gerstner(wc, swC, ${WAVES[2][2]}, ${WAVES[2][3]}, ${WAVES[2][4]}, ${WAVES[2][5]}, disp, tX, tY);
+    gerstner(wc, swD, ${WAVES[3][2]}, ${WAVES[3][3]}, ${WAVES[3][4]}, ${WAVES[3][5]}, disp, tX, tY);
 
     vec2 w = normalize(uWindDir);
-    float rAmp = ${RIPPLE_AMP} + uWindStrength * 0.004;
+    float rAmp = ${RIPPLE_AMP} + uWindStrength * 0.003;
     gerstner(wc, w, ${RIPPLE_FREQ}, ${RIPPLE_SPEED}, rAmp, ${RIPPLE_Q}, disp, tX, tY);
 
     vec3 pos = position;
@@ -89,8 +92,10 @@ const vertexShader = `
     vElevation     = disp.y;
 
     float slope = 1.0 - abs(localN.z);
-    vFoam = smoothstep(0.04, 0.18, slope) * 0.6
-          + smoothstep(0.4, 1.0, disp.y) * 0.3;
+    vFoam = smoothstep(0.06, 0.22, slope) * 0.7
+          + smoothstep(1.0, 2.2, disp.y) * 0.5;
+
+    vDepth = clamp((-disp.y + 1.0) / 4.0, 0.0, 1.0);
 
     gl_Position = projectionMatrix * viewMatrix * wp;
   }
@@ -107,82 +112,141 @@ const fragmentShader = `
   varying vec2  vWorldPos;
   varying float vElevation;
   varying float vFoam;
+  varying float vDepth;
+
+  // Hash for procedural patterns
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
 
   void main() {
     vec3 N = normalize(vWorldNormal);
 
-    // ── Detail-normal perturbation (small waves in fragment shader) ──
+    // ── Detail-normal perturbation (small surface waves, fragment-level) ──
     vec2 uv = vWorldPos;
-    float dx = cos(uv.x * 0.7 + uv.y * 0.35 + uTime * 0.9) * 0.28
-             + cos(uv.x * 2.1 - uTime * 1.4) * cos(uv.y * 1.7 + uTime * 0.85) * 0.14
-             + cos(uv.x * 4.8 + uTime * 2.4) * 0.04;
-    float dz = cos(uv.y * 0.6 - uv.x * 0.25 - uTime * 0.65) * 0.28
-             + cos(uv.y * 2.3 + uTime * 1.15) * cos(uv.x * 1.4 - uTime * 1.05) * 0.14
-             + cos(uv.y * 4.2 - uTime * 2.1) * 0.04;
-    N = normalize(N + vec3(dx, 0.0, dz) * 0.12);
+    float t = uTime;
+    float dx = cos(uv.x * 0.55 + uv.y * 0.28 + t * 0.7)  * 0.30
+             + cos(uv.x * 1.6 - t * 1.1) * cos(uv.y * 1.3 + t * 0.7) * 0.18
+             + cos(uv.x * 3.8 + t * 2.0) * cos(uv.y * 3.2 - t * 1.5) * 0.06
+             + cos(uv.x * 7.0 + t * 3.2) * 0.02;
+    float dz = cos(uv.y * 0.50 - uv.x * 0.20 - t * 0.55) * 0.30
+             + cos(uv.y * 1.8 + t * 0.95) * cos(uv.x * 1.1 - t * 0.85) * 0.18
+             + cos(uv.y * 3.5 - t * 1.8) * cos(uv.x * 2.8 + t * 1.3) * 0.06
+             + cos(uv.y * 6.5 - t * 2.8) * 0.02;
+    N = normalize(N + vec3(dx, 0.0, dz) * 0.10);
 
     vec3 V      = normalize(cameraPosition - vWorldPosition);
-    vec3 sunDir = normalize(vec3(0.28, 0.82, 0.38));
-
-    // ── Water colour — elevation-based 4-stop gradient ──
-    vec3 abyss  = vec3(0.002, 0.018, 0.06);
-    vec3 deep   = vec3(0.008, 0.055, 0.14);
-    vec3 mid    = vec3(0.02,  0.16,  0.26);
-    vec3 crest  = vec3(0.05,  0.28,  0.36);
-
-    float t = clamp((vElevation + 1.2) / 2.4, 0.0, 1.0);
-    vec3 col = mix(abyss, deep, smoothstep(0.0, 0.25, t));
-    col = mix(col, mid,   smoothstep(0.25, 0.55, t));
-    col = mix(col, crest, smoothstep(0.55, 1.0,  t));
-
-    // ── Diffuse ──
+    vec3 sunDir = normalize(vec3(0.25, 0.80, 0.35));
+    float NdotV = max(dot(N, V), 0.0);
     float NdotL = max(dot(N, sunDir), 0.0);
-    col += vec3(0.018, 0.035, 0.045) * NdotL;
 
-    // ── Subsurface scattering — turquoise glow through thin crests ──
-    vec3 sssDir = normalize(sunDir + N * 0.6);
-    float sss   = pow(max(dot(V, -sssDir), 0.0), 3.5)
-                * smoothstep(-0.2, 0.8, vElevation) * 0.45;
-    col += vec3(0.01, 0.22, 0.16) * sss;
+    // ── Base water colour: deep navy underneath, brighter teal above ──
+    vec3 abyssCol    = vec3(0.001, 0.012, 0.045);
+    vec3 deepCol     = vec3(0.005, 0.035, 0.10);
+    vec3 midCol      = vec3(0.012, 0.10,  0.20);
+    vec3 surfaceCol  = vec3(0.025, 0.18,  0.30);
+    vec3 crestCol    = vec3(0.05,  0.26,  0.34);
 
-    // Back-light rim on crests looking toward the sun
-    float backLit = pow(max(dot(V, -sunDir), 0.0), 8.0)
-                  * smoothstep(0.1, 0.9, vElevation) * 0.35;
-    col += vec3(0.02, 0.14, 0.10) * backLit;
+    float elev = clamp((vElevation + 2.5) / 5.0, 0.0, 1.0);
+    vec3 col = mix(abyssCol, deepCol,    smoothstep(0.0,  0.15, elev));
+    col = mix(col, midCol,               smoothstep(0.15, 0.35, elev));
+    col = mix(col, surfaceCol,           smoothstep(0.35, 0.65, elev));
+    col = mix(col, crestCol,             smoothstep(0.65, 1.0,  elev));
 
-    // ── Sun specular — crisp glint ──
+    // Darken the deep troughs further with depth-dependent absorption
+    col *= mix(0.55, 1.0, elev);
+
+    // ── Diffuse lighting ──
+    col += vec3(0.012, 0.028, 0.038) * NdotL;
+
+    // ── Subsurface scattering — luminous turquoise through wave crests ──
+    vec3 sssDir = normalize(sunDir + N * 0.55);
+    float sss = pow(max(dot(V, -sssDir), 0.0), 3.0)
+              * smoothstep(-0.5, 1.5, vElevation) * 0.55;
+    col += vec3(0.015, 0.25, 0.18) * sss;
+
+    // Thinner areas near crest tops get extra translucency
+    float thinEdge = smoothstep(1.2, 2.4, vElevation) * pow(max(1.0 - NdotV, 0.0), 2.0);
+    col += vec3(0.02, 0.20, 0.15) * thinEdge * 0.4;
+
+    // Back-lit rim on crests
+    float backLit = pow(max(dot(V, -sunDir), 0.0), 6.0)
+                  * smoothstep(0.3, 1.8, vElevation) * 0.35;
+    col += vec3(0.025, 0.16, 0.12) * backLit;
+
+    // ── Sun specular — sharp dancing glints ──
     vec3  H       = normalize(sunDir + V);
-    float sunSpec = pow(max(dot(N, H), 0.0), 350.0) * 1.0;
-    col += vec3(1.0, 0.96, 0.88) * sunSpec;
+    float NdotH   = max(dot(N, H), 0.0);
+    float sunSpec = pow(NdotH, 512.0) * 1.4;
+    col += vec3(1.0, 0.97, 0.90) * sunSpec;
 
-    // ── Sky specular — broad soft shimmer ──
-    float skySpec = pow(max(dot(N, H), 0.0), 12.0) * 0.06;
-    col += vec3(0.4, 0.6, 0.8) * skySpec;
+    // Secondary broader sun shimmer
+    float shimmer = pow(NdotH, 48.0) * 0.12;
+    col += vec3(0.9, 0.95, 1.0) * shimmer;
 
-    // ── Fresnel reflection — sky gradient ──
-    float fresnel = pow(1.0 - max(dot(V, N), 0.0), 5.0);
-    vec3 R        = reflect(-V, N);
-    float skyT    = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 skyCol   = mix(vec3(0.55, 0.70, 0.82), vec3(0.22, 0.42, 0.72), skyT);
-    col = mix(col, skyCol, fresnel * 0.38);
+    // ── Sky specular — broad cool reflection ──
+    float skySpec = pow(NdotH, 10.0) * 0.04;
+    col += vec3(0.45, 0.6, 0.8) * skySpec;
 
-    // ── Foam — steep faces + animated wind-streaks ──
+    // ── Fresnel reflection — sky dome gradient ──
+    float fresnel = pow(1.0 - NdotV, 4.5);
+    vec3 R     = reflect(-V, N);
+    float skyT = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 horizonCol = vec3(0.60, 0.74, 0.85);
+    vec3 zenithCol  = vec3(0.18, 0.38, 0.68);
+    vec3 skyReflect = mix(horizonCol, zenithCol, skyT);
+    col = mix(col, skyReflect, fresnel * 0.42);
+
+    // ── Foam & whitecaps ──
     float foam = vFoam;
+
+    // Animated wind-aligned foam streaks on wave faces
     vec2 fw = normalize(uWindDir);
-    float streak = sin(dot(vWorldPos, fw) * 0.35 + uTime * 0.25)
-                 * cos(dot(vWorldPos, vec2(-fw.y, fw.x)) * 0.28 - uTime * 0.15);
-    foam += max(streak, 0.0) * 0.12 * smoothstep(0.15, 0.7, vElevation);
-    col = mix(col, vec3(0.92, 0.96, 0.98), clamp(foam, 0.0, 1.0) * 0.45);
+    vec2 perp = vec2(-fw.y, fw.x);
+    float streak1 = sin(dot(vWorldPos, fw) * 0.25 + t * 0.20)
+                  * cos(dot(vWorldPos, perp) * 0.18 - t * 0.10);
+    float streak2 = sin(dot(vWorldPos, fw) * 0.6 + t * 0.35)
+                  * cos(dot(vWorldPos, perp) * 0.45 + t * 0.18);
+    foam += max(streak1, 0.0) * 0.20 * smoothstep(0.5, 1.8, vElevation);
+    foam += max(streak2, 0.0) * 0.10 * smoothstep(0.8, 2.0, vElevation);
 
-    // ── Subtle tone-map to keep highlights from blowing out ──
-    col = col / (col + 0.6) * 1.15;
+    // Breaking-crest whitecap at the very top of the wave
+    float crestWhite = smoothstep(1.6, 2.4, vElevation) * 0.7;
+    float crestNoise = sin(vWorldPos.x * 1.2 + t * 0.8) * sin(vWorldPos.y * 1.5 - t * 0.6);
+    crestWhite *= 0.5 + 0.5 * max(crestNoise, 0.0);
+    foam += crestWhite;
 
-    gl_FragColor = vec4(col, 1.0);
+    // Speckle foam on steep faces
+    float speckle = hash(floor(vWorldPos * 1.5)) * smoothstep(0.12, 0.25, 1.0 - abs(N.y));
+    foam += speckle * 0.15;
+
+    vec3 foamCol = vec3(0.92, 0.96, 0.99);
+    col = mix(col, foamCol, clamp(foam, 0.0, 1.0) * 0.55);
+
+    // ── Alpha: translucent in troughs, opaque on surface ──
+    float alpha = mix(0.82, 0.97, elev);
+    alpha = mix(alpha, 1.0, fresnel * 0.5);
+    alpha = mix(alpha, 1.0, clamp(foam * 0.5, 0.0, 1.0));
+
+    // ── Tone-map ──
+    col = col / (col + 0.55) * 1.2;
+
+    gl_FragColor = vec4(col, alpha);
   }
 `
 
 // ────────────────────────── runtime API ──────────────────────────
 export function createOcean(scene: THREE.Scene): THREE.Mesh {
+  // Deep-water backing plane visible through the alpha transparency
+  const deepGeom = new THREE.PlaneGeometry(OCEAN_SIZE * 2, OCEAN_SIZE * 2)
+  const deepMat  = new THREE.MeshBasicMaterial({ color: 0x010820, side: THREE.FrontSide })
+  const deepPlane = new THREE.Mesh(deepGeom, deepMat)
+  deepPlane.rotation.x = -Math.PI / 2
+  deepPlane.position.y = -6.0
+  deepPlane.frustumCulled = false
+  deepPlane.renderOrder = -1
+  scene.add(deepPlane)
+
   const geometry = new THREE.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE, OCEAN_SEGMENTS, OCEAN_SEGMENTS)
   const material = new THREE.ShaderMaterial({
     vertexShader,
@@ -193,8 +257,8 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
       uWindDir:      { value: new THREE.Vector2(0, 1) },
       uWindStrength: { value: 3 }
     },
-    transparent: false,
-    side: THREE.FrontSide,
+    transparent: true,
+    side: THREE.DoubleSide,
     fog: false,
     depthWrite: true
   })
@@ -204,6 +268,7 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
   mesh.position.y = -1.1
   mesh.renderOrder = 0
   mesh.frustumCulled = false
+  mesh.userData.deepPlane = deepPlane
   scene.add(mesh)
   return mesh
 }
@@ -218,6 +283,10 @@ export function updateOcean(
 ) {
   mesh.position.x = playerX
   mesh.position.z = playerZ
+  if (mesh.userData.deepPlane) {
+    mesh.userData.deepPlane.position.x = playerX
+    mesh.userData.deepPlane.position.z = playerZ
+  }
   const u = (mesh.material as THREE.ShaderMaterial).uniforms
   u.uTime.value         = time
   u.uWorldOffset.value.set(playerX, playerZ)
@@ -243,17 +312,17 @@ export function getOceanHeight(
   }
   const wdx = Math.sin(windAngle)
   const wdz = Math.cos(windAngle)
-  const rAmp = RIPPLE_AMP + windStrength * 0.004
+  const rAmp = RIPPLE_AMP + windStrength * 0.003
   h += rAmp * Math.sin((worldX * wdx + worldZ * wdz) * RIPPLE_FREQ + time * RIPPLE_SPEED)
   return h
 }
 
 // ────────────────────────── bow-spray pool ──────────────────────────
-const SPRAY_POOL_SIZE = 40
+const SPRAY_POOL_SIZE = 60
 
 export function createSprayPool(scene: THREE.Scene) {
   const sprites: THREE.Mesh[] = []
-  const geom = new THREE.SphereGeometry(0.12, 4, 4)
+  const geom = new THREE.SphereGeometry(0.15, 5, 5)
   const mat  = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 })
 
   for (let i = 0; i < SPRAY_POOL_SIZE; i++) {
@@ -277,21 +346,21 @@ export function emitSpray(
     if (pool.data[i].active) continue
     const d = pool.data[i], s = pool.sprites[i]
 
-    const spread = (Math.random() - 0.5) * 1.2
-    d.vx   = Math.sin(angle + spread) * (speed * 0.08 + Math.random() * 2)
-    d.vy   = 2 + Math.random() * 3
-    d.vz   = Math.cos(angle + spread) * (speed * 0.08 + Math.random() * 2)
-    d.life = 0.4 + Math.random() * 0.5
+    const spread = (Math.random() - 0.5) * 1.4
+    d.vx   = Math.sin(angle + spread) * (speed * 0.10 + Math.random() * 2.5)
+    d.vy   = 2.5 + Math.random() * 4
+    d.vz   = Math.cos(angle + spread) * (speed * 0.10 + Math.random() * 2.5)
+    d.life = 0.5 + Math.random() * 0.6
     d.active = true
 
     s.position.set(
-      x + Math.sin(angle) * 4 + (Math.random() - 0.5) * 2,
-      0.5,
-      z + Math.cos(angle) * 4 + (Math.random() - 0.5) * 2
+      x + Math.sin(angle) * 5 + (Math.random() - 0.5) * 3,
+      0.8,
+      z + Math.cos(angle) * 5 + (Math.random() - 0.5) * 3
     )
     s.visible = true;
-    (s.material as THREE.MeshBasicMaterial).opacity = 0.7
-    s.scale.setScalar(0.6 + Math.random() * 0.6)
+    (s.material as THREE.MeshBasicMaterial).opacity = 0.75
+    s.scale.setScalar(0.7 + Math.random() * 0.8)
     spawned++
   }
 }
@@ -308,9 +377,9 @@ export function updateSpray(pool: ReturnType<typeof createSprayPool>, dt: number
     s.position.y += d.vy * dt
     s.position.z += d.vz * dt
 
-    const fade = Math.max(0, d.life / 0.7);
-    (s.material as THREE.MeshBasicMaterial).opacity = fade * 0.6
-    s.scale.multiplyScalar(1 - dt * 0.8)
+    const fade = Math.max(0, d.life / 0.8);
+    (s.material as THREE.MeshBasicMaterial).opacity = fade * 0.65
+    s.scale.multiplyScalar(1 - dt * 0.6)
 
     if (d.life <= 0 || s.position.y < -0.5) {
       d.active = false

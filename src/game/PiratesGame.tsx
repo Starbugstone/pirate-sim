@@ -42,7 +42,8 @@ const initialUi = {
     cannonCount: 0,
     cannonSpeed: 0,
     maxHpBonus: 0,
-    repairCount: 0
+    repairCount: 0,
+    parrot: 0
   }
 }
 export function PiratesGame() {
@@ -109,6 +110,7 @@ const shopOpen = ref(false)
 const playerUpgrades = ref({
   sailSpeed: 0,   // +1-3 = faster sails (extra speed bonus)
   cannonCount: 0, // +1-3 = more cannons per broadside
+  parrot: 0,      // +1-5 = pirate's parrot, each level +5% loot
   cannonSpeed: 0, // +1-3 = faster reload
   maxHpBonus: 0,  // +10 max HP per level
   repairCount: 0  // times repair used (increases cost by 10 each time)
@@ -158,6 +160,11 @@ let targetRotation = 0
 let anchorDropped = false
 let anchorAnimating = false
 let anchorMesh = null
+let anchorAnimProgress = 0   // 0 = fully raised, 1 = fully dropped
+let anchorAnimDir = 0        // 1 = dropping, -1 = raising
+
+// Parrot state
+let parrotGroup: THREE.Group | null = null
 
 // Camera - 0 = behind (navigation), 1 = top-down (fighting)
 let cameraMode = 0 // Start in behind view
@@ -1048,10 +1055,11 @@ function updateTreasure(dt) {
       }
 
       if (treasureCollectTimer <= 0) {
-        // Collected!
-        const coins = t.gold || 50
+        const baseCoins = t.gold || 50
+        const parrotBonus = 1 + playerUpgrades.value.parrot * 0.05
+        const coins = Math.round(baseCoins * parrotBonus)
         gold.value += coins
-        showMessage(`+${coins} gold`, 3000)
+        showMessage(playerUpgrades.value.parrot > 0 ? `+${coins} gold (parrot +${playerUpgrades.value.parrot * 5}%)` : `+${coins} gold`, 3000)
 
         // Start fade out animation
         t.collected = true
@@ -1423,35 +1431,14 @@ function onKeyDown(e) {
     anchorAnimating = true
 
     if (!anchorDropped) {
-      // Drop anchor
       showMessage('Dropping anchor...', 1500)
-
-      // Create anchor mesh if not exists
-      if (!anchorMesh) {
-        createAnchor()
-      }
-
-      // Animate anchor dropping (1 second)
-      setTimeout(() => {
-        anchorDropped = true
-        anchorAnimating = false
-        playerSpeed.value = 0 // Stop forward momentum
-        showMessage('Anchor dropped', 1500)
-        // Check if near a harbour
-        checkHarbourEntry()
-      }, 1000)
+      if (!anchorMesh) createAnchor()
+      anchorAnimDir = 1
+      anchorAnimProgress = 0
     } else {
-      // Raise anchor
       showMessage('Raising anchor...', 1500)
-
-      // Animate anchor raising (1 second)
-      setTimeout(() => {
-        anchorDropped = false
-        anchorAnimating = false
-        harbourShopDismissed = false
-        playerSpeed.value = 0.5 // Start with slow speed
-        showMessage('Anchor raised', 1500)
-      }, 1000)
+      anchorAnimDir = -1
+      anchorAnimProgress = 1
     }
   }
 }
@@ -1463,33 +1450,45 @@ function onKeyUp(e) {
 }
 
 function createAnchor() {
-  // Simple anchor mesh
   const anchorGroup = new THREE.Group()
+  const metalMat = new THREE.MeshPhongMaterial({ color: 0x2a2a2a, specular: 0x444444, shininess: 30 })
 
-  // Chain
-  const chainGeom = new THREE.CylinderGeometry(0.05, 0.05, 15, 6)
-  const chainMat = new THREE.MeshPhongMaterial({ color: 0x333333 })
-  const chain = new THREE.Mesh(chainGeom, chainMat)
-  chain.position.y = -7.5
+  // Chain (positioned relative to group origin)
+  const chainGeom = new THREE.CylinderGeometry(0.06, 0.06, 10, 6)
+  const chain = new THREE.Mesh(chainGeom, metalMat)
+  chain.position.y = -5
   anchorGroup.add(chain)
 
-  // Anchor body
-  const anchorGeom = new THREE.BoxGeometry(0.8, 0.5, 1)
-  const anchorMat = new THREE.MeshPhongMaterial({ color: 0x222222 })
-  const anchor = new THREE.Mesh(anchorGeom, anchorMat)
-  anchor.position.y = -15
-  anchorGroup.add(anchor)
+  // Shank (vertical bar)
+  const shankGeom = new THREE.CylinderGeometry(0.12, 0.12, 2.5, 8)
+  const shank = new THREE.Mesh(shankGeom, metalMat)
+  shank.position.y = -11
+  anchorGroup.add(shank)
 
-  // Arms
-  const armGeom = new THREE.BoxGeometry(2, 0.15, 0.15)
-  const arm1 = new THREE.Mesh(armGeom, anchorMat)
-  arm1.position.set(0, -14.5, 0)
-  anchorGroup.add(arm1)
-  const arm2 = new THREE.Mesh(armGeom, anchorMat)
-  arm2.rotation.y = Math.PI / 2
-  arm2.position.set(0, -14.5, 0)
-  anchorGroup.add(arm2)
+  // Crown (bottom cross-piece)
+  const crownGeom = new THREE.BoxGeometry(2.2, 0.2, 0.2)
+  const crown = new THREE.Mesh(crownGeom, metalMat)
+  crown.position.y = -12.2
+  anchorGroup.add(crown)
 
+  // Flukes (angled tips)
+  const flukeGeom = new THREE.ConeGeometry(0.25, 1.2, 4)
+  const flukeL = new THREE.Mesh(flukeGeom, metalMat)
+  flukeL.rotation.z = Math.PI * 0.15
+  flukeL.position.set(-1.1, -12.6, 0)
+  anchorGroup.add(flukeL)
+  const flukeR = new THREE.Mesh(flukeGeom, metalMat)
+  flukeR.rotation.z = -Math.PI * 0.15
+  flukeR.position.set(1.1, -12.6, 0)
+  anchorGroup.add(flukeR)
+
+  // Ring at top
+  const ringGeom = new THREE.TorusGeometry(0.3, 0.06, 8, 12)
+  const ring = new THREE.Mesh(ringGeom, metalMat)
+  ring.position.y = 0.2
+  anchorGroup.add(ring)
+
+  anchorGroup.position.y = 0
   anchorGroup.visible = false
   playerShip.add(anchorGroup)
   anchorMesh = anchorGroup
@@ -1522,12 +1521,89 @@ function checkHarbourEntry() {
   }
 }
 
+function createParrotMesh() {
+  if (parrotGroup) return
+  const g = new THREE.Group()
+
+  // Body — bright green/red macaw
+  const bodyGeom = new THREE.SphereGeometry(0.35, 8, 8)
+  bodyGeom.scale(1, 1.3, 0.9)
+  const bodyMat = new THREE.MeshPhongMaterial({ color: 0x1b8c1b, specular: 0x224422, shininess: 20 })
+  const body = new THREE.Mesh(bodyGeom, bodyMat)
+  g.add(body)
+
+  // Head
+  const headGeom = new THREE.SphereGeometry(0.22, 8, 8)
+  const headMat = new THREE.MeshPhongMaterial({ color: 0x22aa22, specular: 0x336633, shininess: 25 })
+  const head = new THREE.Mesh(headGeom, headMat)
+  head.position.set(0, 0.42, 0.08)
+  g.add(head)
+
+  // Beak
+  const beakGeom = new THREE.ConeGeometry(0.07, 0.18, 6)
+  const beakMat = new THREE.MeshPhongMaterial({ color: 0xf5c542 })
+  const beak = new THREE.Mesh(beakGeom, beakMat)
+  beak.rotation.x = -Math.PI / 2
+  beak.position.set(0, 0.40, 0.28)
+  g.add(beak)
+
+  // Eyes
+  const eyeGeom = new THREE.SphereGeometry(0.04, 6, 6)
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 })
+  const eyeL = new THREE.Mesh(eyeGeom, eyeMat)
+  eyeL.position.set(-0.12, 0.48, 0.17)
+  g.add(eyeL)
+  const eyeR = new THREE.Mesh(eyeGeom, eyeMat)
+  eyeR.position.set(0.12, 0.48, 0.17)
+  g.add(eyeR)
+
+  // Red chest patch
+  const chestGeom = new THREE.SphereGeometry(0.20, 6, 6)
+  chestGeom.scale(0.8, 0.7, 0.5)
+  const chestMat = new THREE.MeshPhongMaterial({ color: 0xcc2222 })
+  const chest = new THREE.Mesh(chestGeom, chestMat)
+  chest.position.set(0, 0.05, 0.22)
+  g.add(chest)
+
+  // Tail feathers
+  const tailGeom = new THREE.BoxGeometry(0.12, 0.5, 0.05)
+  const tailMat1 = new THREE.MeshPhongMaterial({ color: 0x2244cc })
+  const tailMat2 = new THREE.MeshPhongMaterial({ color: 0xcc2222 })
+  const tail1 = new THREE.Mesh(tailGeom, tailMat1)
+  tail1.position.set(-0.06, -0.55, -0.1)
+  tail1.rotation.x = 0.15
+  g.add(tail1)
+  const tail2 = new THREE.Mesh(tailGeom, tailMat2)
+  tail2.position.set(0.06, -0.55, -0.1)
+  tail2.rotation.x = 0.15
+  g.add(tail2)
+
+  // Wings (folded)
+  const wingGeom = new THREE.BoxGeometry(0.06, 0.35, 0.25)
+  const wingMat = new THREE.MeshPhongMaterial({ color: 0x178c17 })
+  const wingL = new THREE.Mesh(wingGeom, wingMat)
+  wingL.position.set(-0.28, 0.05, -0.02)
+  wingL.rotation.z = 0.15
+  g.add(wingL)
+  const wingR = new THREE.Mesh(wingGeom, wingMat)
+  wingR.position.set(0.28, 0.05, -0.02)
+  wingR.rotation.z = -0.15
+  g.add(wingR)
+
+  // Perch on the crosstree near the crow's nest
+  g.position.set(0.6, 12.5, 0)
+  g.scale.setScalar(1.8)
+  playerShip.add(g)
+  parrotGroup = g
+}
+
 function buyUpgrade(type) {
   const costs = {
     sailSpeed: { 1: 150, 2: 350, 3: 600 },
     cannonCount: { 1: 200, 2: 450, 3: 750 },
     cannonSpeed: { 1: 175, 2: 400, 3: 700 },
-    maxHpBonus: { 1: 150, 2: 300, 3: 500, 4: 750, 5: 1000 }
+    maxHpBonus: { 1: 150, 2: 300, 3: 500, 4: 750, 5: 1000 },
+    parrot: { 1: 500, 2: 750, 3: 1100, 4: 1500, 5: 2000 }
   }
 
   if (type === 'repairHaul') {
@@ -1541,6 +1617,29 @@ function buyUpgrade(type) {
     const maxHp = 100 + playerUpgrades.value.maxHpBonus * 10
     hp.value = Math.min(maxHp, hp.value + 10)
     showShopMessage(`Repaired: +10 HP for ${cost}g`)
+    return
+  }
+
+  if (type === 'parrot') {
+    const current = playerUpgrades.value.parrot
+    if (current >= 5) {
+      showShopMessage('Max level reached')
+      return
+    }
+    const nextLevel = current + 1
+    const cost = costs.parrot[nextLevel]
+    if (gold.value < cost) {
+      showShopMessage(`Not enough gold. Need ${cost}`)
+      return
+    }
+    gold.value -= cost
+    playerUpgrades.value.parrot = nextLevel
+    if (nextLevel === 1) {
+      createParrotMesh()
+      showShopMessage(`Polly wants a cracker! +5% loot`)
+    } else {
+      showShopMessage(`Parrot levelled up! Now +${nextLevel * 5}% loot`)
+    }
     return
   }
 
@@ -1985,17 +2084,56 @@ function update(dt) {
   playerShip.rotation.z = roll
   playerShip.rotation.y = playerAngle
 
-  // Emit bow spray when moving fast
-  if (sprayPool && playerSpeed.value > 4) {
-    const sprayChance = (playerSpeed.value - 4) * 0.04
-    if (Math.random() < sprayChance) {
-      emitSpray(sprayPool, px, pz, playerAngle, playerSpeed.value, 1 + Math.floor(playerSpeed.value / 6))
+  // Emit bow spray when moving through waves
+  if (sprayPool) {
+    const spd = playerSpeed.value
+    const waveSlam = Math.max(0, -(hBow - hStern)) * spd * 0.02
+    if (spd > 3) {
+      const sprayChance = (spd - 3) * 0.035 + waveSlam
+      if (Math.random() < sprayChance) {
+        emitSpray(sprayPool, px, pz, playerAngle, spd, 1 + Math.floor(spd / 5))
+      }
     }
   }
 
-  // Update anchor visibility
+  // Anchor drop/raise animation
   if (anchorMesh) {
     anchorMesh.visible = anchorDropped || anchorAnimating
+
+    if (anchorAnimating) {
+      anchorAnimProgress += anchorAnimDir * dt * 1.0  // 1 second full travel
+      anchorAnimProgress = Math.max(0, Math.min(1, anchorAnimProgress))
+
+      // Animate Y from 0 (raised, tucked into ship) to -15 (dropped into water)
+      const ease = anchorAnimDir > 0
+        ? anchorAnimProgress * anchorAnimProgress          // accelerate drop
+        : 1 - (1 - anchorAnimProgress) * (1 - anchorAnimProgress)  // decelerate raise
+      anchorMesh.position.y = -ease * 12
+
+      if (anchorAnimDir > 0 && anchorAnimProgress >= 1) {
+        anchorAnimating = false
+        anchorAnimDir = 0
+        anchorDropped = true
+        playerSpeed.value = 0
+        showMessage('Anchor dropped', 1500)
+        checkHarbourEntry()
+      } else if (anchorAnimDir < 0 && anchorAnimProgress <= 0) {
+        anchorAnimating = false
+        anchorAnimDir = 0
+        anchorDropped = false
+        harbourShopDismissed = false
+        playerSpeed.value = 0.5
+        showMessage('Anchor raised', 1500)
+      }
+    }
+  }
+
+  // Parrot idle animation — head bob, slight body sway
+  if (parrotGroup) {
+    const pt = oceanTime * 2.5
+    parrotGroup.rotation.y = Math.sin(pt * 0.4) * 0.3
+    if (parrotGroup.children[1]) parrotGroup.children[1].rotation.x = Math.sin(pt * 1.2) * 0.12
+    parrotGroup.position.y = 12.5 + Math.sin(pt * 0.7) * 0.08
   }
 
   // Camera follow - interpolate between behind view and top-down based on cameraMode
@@ -2386,19 +2524,6 @@ function update(dt) {
     }
   }
 
-  // Check if all enemies are gone (including sinking)
-  if (enemyShips.value.length === 0 && enemyShipMeshes.length === 0 && !krakenActive) {
-    gold.value += 200
-    showMessage('All enemies destroyed. +200 gold')
-
-    // [KRAKEN DISABLED]
-    // setTimeout(() => {
-    //   if (gameState.value === 'playing') {
-    //     createKrakenLocal()
-    //   }
-    // }, 3000)
-  }
-
   // Kraken AI
   if (krakenActive && kraken.value.hp > 0) {
     const dx = playerPos.value.x - kraken.value.x
@@ -2733,10 +2858,17 @@ function startGame() {
   // Reset anchor
   anchorDropped = false
   anchorAnimating = false
+  anchorAnimProgress = 0
+  anchorAnimDir = 0
+  if (anchorMesh) anchorMesh.position.y = 0
   shopOpen.value = false
 
   // Reset upgrades
-  playerUpgrades.value = { sailSpeed: 0, cannonCount: 0, cannonSpeed: 0, maxHpBonus: 0, repairCount: 0 }
+  playerUpgrades.value = { sailSpeed: 0, cannonCount: 0, cannonSpeed: 0, maxHpBonus: 0, repairCount: 0, parrot: 0 }
+  if (parrotGroup && playerShip) {
+    playerShip.remove(parrotGroup)
+    parrotGroup = null
+  }
   lastChunkCount = 0
   disposeQueue = [] // Clear pending disposals
   windParticleFrameCounter = 0
@@ -3003,6 +3135,21 @@ function startGame() {
                 </button>
               ) : (
                 <div className="upgrade-max">MAXED (150 HP)</div>
+              )}
+            </div>
+            <div className="upgrade-card">
+              <div className="upgrade-icon" style={{fontSize: '1.6rem'}}>🦜</div>
+              <div className="upgrade-name">Pirate's Parrot</div>
+              <div className="upgrade-level">Level {ui.playerUpgrades.parrot}/5</div>
+              <div className="upgrade-bonus">
+                {ui.playerUpgrades.parrot === 0 ? 'No loot bonus' : `+${ui.playerUpgrades.parrot * 5}% loot`}
+              </div>
+              {ui.playerUpgrades.parrot < 5 ? (
+                <button className="upgrade-btn" onClick={() => actionsRef.current.buyUpgrade('parrot')}>
+                  BUY {[500, 750, 1100, 1500, 2000][ui.playerUpgrades.parrot]}g
+                </button>
+              ) : (
+                <div className="upgrade-max">MAXED (+25% loot)</div>
               )}
             </div>
           </div>

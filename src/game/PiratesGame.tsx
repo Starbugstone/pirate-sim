@@ -24,6 +24,7 @@ const initialUi = {
   enemyIndicators: [],
   shopOpen: false,
   shopMessage: '',
+  brakeActive: false,
   playerUpgrades: {
     sailSpeed: 0,
     cannonCount: 0,
@@ -35,6 +36,7 @@ const initialUi = {
 export function PiratesGame() {
   const containerRef = useRef(null)
   const canvasRef = useRef(null)
+  const windOverlayRef = useRef(null)
   const actionsRef = useRef({
     startGame: () => {},
     buyUpgrade: (_type) => {},
@@ -57,6 +59,14 @@ export function PiratesGame() {
       },
       set value(next) {
         canvasRef.current = next
+      }
+    }
+    const windOverlay = {
+      get value() {
+        return windOverlayRef.current
+      },
+      set value(next) {
+        windOverlayRef.current = next
       }
     }
 
@@ -97,13 +107,21 @@ const showShopMessage = (msg) => {
   setTimeout(() => { if (shopMessage.value === msg) shopMessage.value = '' }, 2500)
 }
 
-// Wind particles rendered as a lightweight point field around the player.
-const MAX_WIND_PARTICLES = 120
-let windParticles
+// Wind particles rendered on a lightweight overlay canvas.
+const MAX_WIND_PARTICLES = 280
+let windParticles = []
 let debugWindArrow
-let windParticlePositions
-let windParticleLifetimes
-let windParticleVels // { angle, speed } stored per particle
+let windParticleContext = null
+const windWorldVector = new THREE.Vector3()
+const windCameraRight = new THREE.Vector3()
+const windCameraUp = new THREE.Vector3()
+const windCameraForward = new THREE.Vector3()
+const windViewCenter = new THREE.Vector3()
+const windFlowVector = new THREE.Vector3()
+const windCrossVector = new THREE.Vector3()
+const windHeadProjection = new THREE.Vector3()
+const windTailProjection = new THREE.Vector3()
+const windTailWorld = new THREE.Vector3()
 const MAX_TREASURES = 10
 const MAX_CANNONBALLS = 40
 const MAX_WAKE_PARTICLES = 35
@@ -145,6 +163,8 @@ let targetWindAngle = 0 // For smooth wind transitions
 const windSpeed = ref(3)
 let targetWindSpeed = 3 // For smooth wind speed transitions
 let windChangeTimer = 0
+let windVisualAngle = 0
+let windVisualSpeed = 3
 
 // Projectiles
 let cannonballs = []
@@ -181,13 +201,23 @@ let worldObjects = { islands: [], rocks: [], ships: [] }
 
 // Ocean (GPU shader - no CPU trig)
 let oceanMesh
-const OCEAN_SEGMENTS = 80
+const OCEAN_SEGMENTS = 64
 
 const showMessage = (msg, duration = 3000) => {
   message.value = msg
   setTimeout(() => {
     if (message.value === msg) message.value = ''
   }, duration)
+}
+
+function normalizeAngle(angle) {
+  while (angle > Math.PI) angle -= Math.PI * 2
+  while (angle < -Math.PI) angle += Math.PI * 2
+  return angle
+}
+
+function shortestAngleDelta(from, to) {
+  return normalizeAngle(to - from)
 }
 
 // === MEMORY MANAGEMENT ===
@@ -268,72 +298,197 @@ function createOcean() {
   oceanMesh.renderOrder = 0
   scene.add(oceanMesh)
 }
-function createWindParticles() {
-  const count = MAX_WIND_PARTICLES
-  windParticlePositions = new Float32Array(count * 3)
-  windParticleLifetimes = new Float32Array(count)
-  windParticleVels = new Float32Array(count)
-  
-  for (let i = 0; i < count; i++) {
-    const driftX = Math.sin(windAngle)
-    const driftZ = Math.cos(windAngle)
-    const side = (Math.random() - 0.5) * 60
-    const startDist = 12 + Math.random() * 45
-    windParticlePositions[i * 3] = playerPos.value.x - driftX * startDist + driftZ * side
-    windParticlePositions[i * 3 + 1] = 4 + Math.random() * 12
-    windParticlePositions[i * 3 + 2] = playerPos.value.z - driftZ * startDist - driftX * side
-    windParticleLifetimes[i] = Math.random()
-    windParticleVels[i] = 0.7 + Math.random() * 1.0
+
+function resizeWindOverlay() {
+  if (!windOverlay.value) return
+
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+  windOverlay.value.width = Math.floor(window.innerWidth * pixelRatio)
+  windOverlay.value.height = Math.floor(window.innerHeight * pixelRatio)
+  windOverlay.value.style.width = `${window.innerWidth}px`
+  windOverlay.value.style.height = `${window.innerHeight}px`
+
+  windParticleContext = windOverlay.value.getContext('2d')
+  if (windParticleContext) {
+    windParticleContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+    windParticleContext.lineCap = 'round'
+    windParticleContext.lineJoin = 'round'
   }
-  
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(windParticlePositions, 3))
-  const material = new THREE.PointsMaterial({
-    color: 0xdff6ff,
-    size: 4.5,
-    transparent: true,
-    opacity: 0.95,
-    sizeAttenuation: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    depthTest: false,
-    fog: false
-  })
-  windParticles = new THREE.Points(geometry, material)
-  windParticles.frustumCulled = false
-  windParticles.renderOrder = 999 // Always on top
-  scene.add(windParticles)
+}
+
+function updateWindViewData() {
+  camera.matrixWorld.extractBasis(windCameraRight, windCameraUp, windCameraForward)
+  windCameraForward.y = 0
+  if (windCameraForward.lengthSq() < 0.00001) {
+    windCameraForward.set(Math.sin(playerAngle), 0, Math.cos(playerAngle))
+  }
+  windCameraForward.normalize()
+  windCameraRight.crossVectors(windCameraUp, windCameraForward).normalize()
+
+  windFlowVector.set(Math.sin(windVisualAngle), 0, Math.cos(windVisualAngle)).normalize()
+  windCrossVector.set(-windFlowVector.z, 0, windFlowVector.x).normalize()
+
+  windViewCenter.set(
+    playerPos.value.x,
+    0,
+    playerPos.value.z
+  )
+}
+
+function getWindOverlaySpeed() {
+  return 22 + windVisualSpeed * 8.5
+}
+
+function spawnWindParticle(particle, speed, visibleSpawn = false) {
+  updateWindViewData()
+  const crossSpread = 64 + camera.position.y * 0.7
+  const forwardSpread = 46 + camera.position.y * 0.58
+  const backwardSpread = 42 + camera.position.y * 0.38
+  const heightMin = 1.8
+  const heightMax = Math.min(9 + camera.position.y * 0.28, 34)
+  const crossOffset = (Math.random() - 0.5) * crossSpread * 2
+  const forwardOffset = -backwardSpread + Math.random() * (forwardSpread + backwardSpread)
+  const windOffset = visibleSpawn
+    ? (Math.random() - 0.5) * (20 + camera.position.y * 0.18)
+    : (Math.random() - 0.5) * (46 + camera.position.y * 0.42)
+  const gust = 0.75 + Math.random() * 0.7
+
+  particle.x =
+    windViewCenter.x +
+    windCameraRight.x * crossOffset +
+    windCameraForward.x * forwardOffset +
+    windFlowVector.x * windOffset
+  particle.z =
+    windViewCenter.z +
+    windCameraRight.z * crossOffset +
+    windCameraForward.z * forwardOffset +
+    windFlowVector.z * windOffset
+  particle.y = heightMin + Math.random() * (heightMax - heightMin)
+  particle.speed = speed * gust
+  particle.vx = windFlowVector.x * particle.speed + windCrossVector.x * ((Math.random() - 0.5) * particle.speed * 0.08)
+  particle.vz = windFlowVector.z * particle.speed + windCrossVector.z * ((Math.random() - 0.5) * particle.speed * 0.08)
+  particle.vy = (Math.random() - 0.5) * 0.5
+  particle.width = 0.55 + Math.random() * 1.25
+  particle.length = 3.5 + Math.random() * 5.5 + particle.speed * 0.085
+  particle.life = 0
+  particle.maxLife = 1.8 + Math.random() * 1.5
+  particle.alpha = 0.24 + Math.random() * 0.24
+  particle.phase = Math.random() * Math.PI * 2
+  particle.swirl = 0.45 + Math.random() * 1.2
+  particle.swirlSpeed = 1.2 + Math.random() * 2.1
+}
+
+function createWindParticles() {
+  resizeWindOverlay()
+  windVisualAngle = windAngle
+  windVisualSpeed = windSpeed.value
+
+  const speed = getWindOverlaySpeed()
+  windParticles = []
+
+  for (let i = 0; i < MAX_WIND_PARTICLES; i++) {
+    const particle = {}
+    spawnWindParticle(particle, speed, true)
+    windParticles.push(particle)
+  }
 }
 
 function updateWindParticles(dt) {
-  if (!windParticles) return
-  const count = MAX_WIND_PARTICLES
-  const speed = windSpeed.value * 3 + 4
-  
-  for (let i = 0; i < count; i++) {
-    windParticleLifetimes[i] -= dt * 0.4
-    
-    if (windParticleLifetimes[i] <= 0) {
-      const driftX = Math.sin(windAngle)
-      const driftZ = Math.cos(windAngle)
-      const side = (Math.random() - 0.5) * 65
-      const startDist = 18 + Math.random() * 48
-      windParticlePositions[i * 3] = playerPos.value.x - driftX * startDist + driftZ * side
-      windParticlePositions[i * 3 + 1] = 4 + Math.random() * 12
-      windParticlePositions[i * 3 + 2] = playerPos.value.z - driftZ * startDist - driftX * side
-      windParticleLifetimes[i] = 1.5 + Math.random() * 1.5
-      windParticleVels[i] = 0.7 + Math.random() * 1.0
-    } else {
-      windParticlePositions[i * 3] += Math.sin(windAngle) * speed * windParticleVels[i] * dt
-      windParticlePositions[i * 3 + 2] += Math.cos(windAngle) * speed * windParticleVels[i] * dt
+  if (!windParticleContext) return
+
+  const visualSmoothing = Math.min(1, dt * 2.8)
+  windVisualAngle = normalizeAngle(
+    windVisualAngle + shortestAngleDelta(windVisualAngle, windAngle) * visualSmoothing
+  )
+  windVisualSpeed += (windSpeed.value - windVisualSpeed) * visualSmoothing
+
+  const ctx = windParticleContext
+  const width = window.innerWidth
+  const height = window.innerHeight
+  const margin = 140
+  const time = Date.now() * 0.001
+  const speed = getWindOverlaySpeed()
+  updateWindViewData()
+
+  ctx.clearRect(0, 0, width, height)
+  ctx.globalCompositeOperation = 'lighter'
+
+  for (const particle of windParticles) {
+    if (!particle || !Number.isFinite(particle.x) || !Number.isFinite(particle.y) || !Number.isFinite(particle.z)) {
+      spawnWindParticle(particle, speed, true)
+      continue
     }
-    
-    const relX = windParticlePositions[i * 3] - playerPos.value.x
-    const relZ = windParticlePositions[i * 3 + 2] - playerPos.value.z
-    if (relX * relX + relZ * relZ > 85 * 85) windParticleLifetimes[i] = 0
+
+    particle.speed += (speed - particle.speed) * 0.12
+    const swirlPhase = time * particle.swirlSpeed + particle.phase
+    const swirlOffset = Math.sin(swirlPhase) * particle.swirl
+    const verticalSwirl = Math.cos(swirlPhase * 0.9) * particle.swirl * 0.12
+    particle.vx += (windFlowVector.x * particle.speed + windCrossVector.x * swirlOffset - particle.vx) * 0.18
+    particle.vz += (windFlowVector.z * particle.speed + windCrossVector.z * swirlOffset - particle.vz) * 0.18
+    particle.vy += (verticalSwirl - particle.vy) * 0.08
+
+    particle.x += particle.vx * dt
+    particle.z += particle.vz * dt
+    particle.y += particle.vy * dt
+    particle.life += dt
+
+    const fadeIn = Math.min(1, particle.life / 0.25)
+    const fadeOut = Math.max(0, 1 - particle.life / particle.maxLife)
+    const alpha = particle.alpha * fadeIn * fadeOut
+
+    windHeadProjection.set(particle.x, particle.y, particle.z).project(camera)
+
+    const centerDx = particle.x - windViewCenter.x
+    const centerDz = particle.z - windViewCenter.z
+    const centerDistSq = centerDx * centerDx + centerDz * centerDz
+
+    if (
+      particle.life >= particle.maxLife ||
+      centerDistSq > (140 + camera.position.y) * (140 + camera.position.y) ||
+      windHeadProjection.z < -1.2 ||
+      windHeadProjection.z > 1.2
+    ) {
+      spawnWindParticle(particle, speed, true)
+      continue
+    }
+
+    const screenX = (windHeadProjection.x * 0.5 + 0.5) * width
+    const screenY = (-windHeadProjection.y * 0.5 + 0.5) * height
+
+    if (
+      screenX < -margin ||
+      screenX > width + margin ||
+      screenY < -margin ||
+      screenY > height + margin
+    ) {
+      spawnWindParticle(particle, speed, true)
+      continue
+    }
+
+    const velocityLength = Math.max(Math.hypot(particle.vx, particle.vy, particle.vz), 0.0001)
+    windTailWorld.set(
+      particle.x - (particle.vx / velocityLength) * particle.length,
+      particle.y - (particle.vy / velocityLength) * particle.length * 0.16,
+      particle.z - (particle.vz / velocityLength) * particle.length
+    )
+    windTailProjection.copy(windTailWorld).project(camera)
+
+    const tailX = (windTailProjection.x * 0.5 + 0.5) * width
+    const tailY = (-windTailProjection.y * 0.5 + 0.5) * height
+
+    const depthFade = Math.max(0.2, 1 - Math.max(0, windHeadProjection.z) * 0.55)
+    const gradient = ctx.createLinearGradient(tailX, tailY, screenX, screenY)
+    gradient.addColorStop(0, 'rgba(210, 235, 245, 0)')
+    gradient.addColorStop(0.35, `rgba(220, 242, 248, ${(alpha * 0.62 * depthFade).toFixed(3)})`)
+    gradient.addColorStop(1, `rgba(248, 253, 255, ${(alpha * 1.18 * depthFade).toFixed(3)})`)
+
+    ctx.strokeStyle = gradient
+    ctx.lineWidth = particle.width * (1.55 - Math.max(-0.4, windHeadProjection.z + 0.2) * 0.45)
+    ctx.beginPath()
+    ctx.moveTo(tailX, tailY)
+    ctx.lineTo(screenX, screenY)
+    ctx.stroke()
   }
-  
-  windParticles.geometry.attributes.position.needsUpdate = true
 }
 
 // Queue something for gradual disposal (avoids synchronous spikes)
@@ -363,7 +518,7 @@ function init() {
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000)
   camera.position.set(0, 30, -40)
   camera.lookAt(0, 0, 0)
-  renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: true })
+  renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: false, powerPreference: 'high-performance' })
   renderer.setSize(window.innerWidth, window.innerHeight)
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
@@ -384,6 +539,7 @@ function init() {
   window.addEventListener('pointerlockchange', onPointerLockChange)
   window.addEventListener('wheel', onWheel)
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keyup', onKeyUp)
 }
 
 
@@ -1849,8 +2005,17 @@ function updateCannonballs(dt) {
 let mouseDeltaX = 0 // Track mouse movement for steering
 
 let turnAccumulator = 0 // Clamp total accumulated turn
+let brakeHeld = false
+let harbourShopDismissed = false
+
+function releasePointerLock() {
+  if (document.pointerLockElement) {
+    document.exitPointerLock()
+  }
+}
 
 function onMouseMove(e) {
+  if (shopOpen.value) return
   // Always accumulate mouse movement when game is playing
   // This works because pointer lock captures all mouse movement
   if (gameState.value === 'playing') {
@@ -1886,13 +2051,13 @@ function requestPointerLock() {
 
 function onClick(e) {
   // Request pointer lock on any click when playing
-  if (gameState.value === 'playing') {
+  if (gameState.value === 'playing' && !shopOpen.value) {
     requestPointerLock()
   }
 }
 
 function onMouseDown(e) {
-  if (gameState.value === 'playing') {
+  if (gameState.value === 'playing' && !shopOpen.value) {
     // Left click (button 0) = starboard (right), Right click (button 2) = port (left)
     // Inverted: left side of ship = left click feels more natural
     if (e.button === 0) {
@@ -1906,12 +2071,13 @@ function onMouseDown(e) {
 function onContextMenu(e) {
   e.preventDefault() // Prevent context menu on right click
   // Right click fires port cannons (inverted from left click)
-  if (gameState.value === 'playing') {
+  if (gameState.value === 'playing' && !shopOpen.value) {
     fireCannon('port')
   }
 }
 
 function onWheel(e) {
+  if (shopOpen.value) return
   // Scroll up = more top-down (fighting), scroll down = more behind (navigation)
   if (e.deltaY < 0) {
     cameraMode = Math.min(1, cameraMode + 0.1)
@@ -1926,7 +2092,13 @@ function onWheel(e) {
 
 function onKeyDown(e) {
   if (gameState.value !== 'playing') return
+  if (shopOpen.value) return
   if (anchorAnimating) return
+
+  if (e.key === 'b' || e.key === 'B') {
+    brakeHeld = true
+    return
+  }
 
   // A key - toggle anchor
   if (e.key === 'a' || e.key === 'A') {
@@ -1958,10 +2130,17 @@ function onKeyDown(e) {
       setTimeout(() => {
         anchorDropped = false
         anchorAnimating = false
+        harbourShopDismissed = false
         playerSpeed.value = 0.5 // Start with slow speed
         showMessage('Anchor raised', 1500)
       }, 1000)
     }
+  }
+}
+
+function onKeyUp(e) {
+  if (e.key === 'b' || e.key === 'B') {
+    brakeHeld = false
   }
 }
 
@@ -2003,6 +2182,7 @@ const HARBOUR_RANGE = 15 // Distance to trigger harbour shop
 
 function checkHarbourEntry() {
   if (!anchorDropped) return
+  if (harbourShopDismissed) return
 
   for (const island of worldObjects.islands) {
     if (!island.mesh.userData.hasHarbor) continue
@@ -2014,7 +2194,11 @@ function checkHarbourEntry() {
 
     if (dist < HARBOUR_RANGE) {
       shopOpen.value = true
+      harbourShopDismissed = false
       shopMessage.value = ''
+      mouseDeltaX = 0
+      turnAccumulator = 0
+      releasePointerLock()
       showMessage('Welcome to port', 3000)
       return
     }
@@ -2081,12 +2265,18 @@ function buyUpgrade(type) {
 
 function closeShop() {
   shopOpen.value = false
+  harbourShopDismissed = true
+  shopMessage.value = ''
+  showMessage('Back to the helm', 1500)
+  requestPointerLock()
 }
 
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight
   camera.updateProjectionMatrix()
   renderer.setSize(window.innerWidth, window.innerHeight)
+  resizeWindOverlay()
+  createWindParticles()
 }
 
 function getWindDirection() {
@@ -2398,6 +2588,7 @@ function update(dt) {
     // Check if player left harbour zone - auto-close shop
     if (!anchorDropped) {
       shopOpen.value = false
+      harbourShopDismissed = false
     } else {
       let stillInHarbour = false
       for (const island of worldObjects.islands) {
@@ -2410,7 +2601,10 @@ function update(dt) {
           break
         }
       }
-      if (!stillInHarbour) shopOpen.value = false
+      if (!stillInHarbour) {
+        shopOpen.value = false
+        harbourShopDismissed = false
+      }
     }
     renderer.render(scene, camera)
     return
@@ -2427,23 +2621,23 @@ function update(dt) {
   windChangeTimer -= dt
   if (windChangeTimer <= 0) {
     // Set new target wind values
-    // Wind can change by 45-180 degrees each shift
-    const shiftAmount = (Math.random() * 2 + 0.5) * (Math.random() > 0.5 ? 1 : -1)
-    targetWindAngle = windAngle + shiftAmount
-    targetWindSpeed = 2 + Math.random() * 5
-    windChangeTimer = 12 + Math.random() * 5 // Changes every 12-17 seconds
+    // Wind changes should feel broad and nautical, not twitchy.
+    const shiftAmount = (0.35 + Math.random() * 0.9) * (Math.random() > 0.5 ? 1 : -1)
+    targetWindAngle = normalizeAngle(targetWindAngle + shiftAmount)
+    targetWindSpeed = 2.5 + Math.random() * 3.5
+    windChangeTimer = 14 + Math.random() * 6
     showMessage('Wind shifting...', 2000)
   }
 
-  // Gradually transition wind angle (4 second transition)
-  const windTransitionSpeed = 0.25 // Complete transition in ~4 seconds
-  if (Math.abs(targetWindAngle - windAngle) > 0.01) {
-    windAngle += (targetWindAngle - windAngle) * windTransitionSpeed * dt
+  // Wind direction and force should ease over time instead of snapping.
+  const windTransitionSpeed = 0.14
+  const windAngleDelta = shortestAngleDelta(windAngle, targetWindAngle)
+  if (Math.abs(windAngleDelta) > 0.001) {
+    windAngle = normalizeAngle(windAngle + windAngleDelta * windTransitionSpeed * dt * 60)
   }
 
-  // Gradually transition wind speed
-  if (Math.abs(targetWindSpeed - windSpeed.value) > 0.1) {
-    windSpeed.value += (targetWindSpeed - windSpeed.value) * windTransitionSpeed * dt
+  if (Math.abs(targetWindSpeed - windSpeed.value) > 0.02) {
+    windSpeed.value += (targetWindSpeed - windSpeed.value) * (windTransitionSpeed * 0.65) * dt * 60
   }
 
   // Animate sails
@@ -2471,18 +2665,29 @@ function update(dt) {
   // === MOMENTUM-BASED SPEED PHYSICS ===
   // Calculate target speed based on wind alignment
   const windDir = Math.cos(windAngle - playerAngle)
-  const maxSpeed = 15 + playerUpgrades.value.sailSpeed * 3 // Bonus per sail level
-  const minSpeed = 2 // Minimum speed with headwind
-  const targetSpeed = minSpeed + (maxSpeed - minSpeed) * Math.max(0, (windDir + 1) / 2)
+  const windStrengthFactor = Math.max(0.65, Math.min(1.35, 0.7 + windSpeed.value * 0.11))
+  const baseMaxSpeed = 15 + playerUpgrades.value.sailSpeed * 3
+  const maxSpeed = baseMaxSpeed * windStrengthFactor
+  const minSpeed = 1.25 + windSpeed.value * 0.18
+  const windDrive = Math.max(0, (windDir + 1) / 2)
+  const targetSpeed = minSpeed + (maxSpeed - minSpeed) * windDrive
+  const brakingTargetSpeed = 0.35
+  const desiredSpeed = brakeHeld && !anchorDropped ? Math.min(targetSpeed, brakingTargetSpeed) : targetSpeed
 
   // Gradually accelerate/decelerate toward target speed (momentum)
   // Big heavy ship takes a long time to speed up and slow down
   // If anchor dropped, no acceleration allowed
-  const acceleration = anchorDropped ? 0 : 0.5
-  if (playerSpeed.value < targetSpeed) {
-    playerSpeed.value = Math.min(targetSpeed, playerSpeed.value + acceleration * dt)
+  const acceleration = anchorDropped ? 0 : (0.28 + windSpeed.value * 0.06) * (0.78 + windDrive * 0.35)
+  if (playerSpeed.value < desiredSpeed) {
+    playerSpeed.value = Math.min(desiredSpeed, playerSpeed.value + acceleration * dt)
   } else {
-    playerSpeed.value = Math.max(targetSpeed, playerSpeed.value - acceleration * 0.3 * dt)
+    playerSpeed.value = Math.max(desiredSpeed, playerSpeed.value - acceleration * 0.3 * dt)
+  }
+
+  // Holding brake adds drag, but the ship still carries momentum like a heavy hull.
+  if (brakeHeld && !anchorDropped) {
+    const brakingForce = playerSpeed.value > 8 ? 2.1 : 1.35
+    playerSpeed.value = Math.max(0, playerSpeed.value - brakingForce * dt)
   }
 
   // Apply momentum to position
@@ -3115,12 +3320,8 @@ function update(dt) {
   }
   updateWakeParticles(dt)
 
-  // Update wind particles (every 5 frames â€” cheap position math only)
-  windParticleFrameCounter++
-  if (windParticleFrameCounter >= 5) {
-    windParticleFrameCounter = 0
-    updateWindParticles(dt)
-  }
+  // Update GPU wind particles every frame via uniforms only.
+  updateWindParticles(dt)
   
   // Update GPU ocean shader time uniform
   if (oceanMesh) {
@@ -3267,6 +3468,8 @@ function startGame() {
   }
   mouseDeltaX = 0
   turnAccumulator = 0
+  brakeHeld = false
+  harbourShopDismissed = false
   targetRotation = 0
   cameraMode = 0 // Reset to behind view
 
@@ -3287,6 +3490,8 @@ function startGame() {
   playerAngle = 0
   targetRotation = 0
   playerSpeed.value = 0
+  windVisualAngle = windAngle
+  windVisualSpeed = windSpeed.value
 
   // Reset anchor
   anchorDropped = false
@@ -3298,10 +3503,9 @@ function startGame() {
   lastChunkCount = 0
   disposeQueue = [] // Clear pending disposals
   windParticleFrameCounter = 0
-  // Dispose wind particles
-  if (windParticles) {
-    disposeMesh(windParticles)
-    windParticles = null
+  windParticles = []
+  if (windParticleContext) {
+    windParticleContext.clearRect(0, 0, window.innerWidth, window.innerHeight)
   }
   createWindParticles()
   spawnCheckFrameCounter = 0
@@ -3379,6 +3583,7 @@ function startGame() {
         enemyIndicators: [...enemyIndicators.value],
         shopOpen: shopOpen.value,
         shopMessage: shopMessage.value,
+        brakeActive: brakeHeld && !anchorDropped,
         playerUpgrades: { ...playerUpgrades.value }
       })
     }
@@ -3415,8 +3620,12 @@ function startGame() {
       window.removeEventListener('pointerlockchange', onPointerLockChange)
       window.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
       if (document.pointerLockElement) {
         document.exitPointerLock()
+      }
+      if (windParticleContext) {
+        windParticleContext.clearRect(0, 0, window.innerWidth, window.innerHeight)
       }
     }
   }, [])
@@ -3427,7 +3636,7 @@ function startGame() {
           <div className="stat">HP: {ui.hp}/{100 + ui.playerUpgrades.maxHpBonus * 10}</div>
           <div className="stat">Gold: {ui.gold}</div>
           <div className="stat">Wind: {ui.windDirection} {ui.windSpeed.toFixed(1)} kn</div>
-          <div className="stat">Speed: {ui.playerSpeed?.toFixed(1) || '0'} kn</div>
+          <div className="stat">Speed: {ui.playerSpeed?.toFixed(1) || '0'} kn{ui.brakeActive ? ' | BRAKE' : ''}</div>
         </div>
         <div className="hud-center">
           {ui.message ? <div className="message">{ui.message}</div> : null}
@@ -3439,6 +3648,7 @@ function startGame() {
         </div>
       </div>
       <canvas ref={canvasRef}></canvas>
+      <canvas ref={windOverlayRef} className="wind-overlay-canvas"></canvas>
       <div className="indicators">
         {ui.enemyIndicators.map((enemy, index) => (
           <div
@@ -3459,7 +3669,7 @@ function startGame() {
         ))}
       </div>
       <div className="controls">
-        <div className="control-hint">Click to lock | Move mouse to steer | LMB=Starboard | RMB=Port | Scroll = Camera | Avoid rocks</div>
+        <div className="control-hint">Click to lock | Move mouse to steer | LMB=Starboard | RMB=Port | Hold B = Brake | Scroll = Camera | Avoid rocks</div>
       </div>
       {ui.gameState === 'start' ? (
         <div className="overlay">
@@ -3469,6 +3679,7 @@ function startGame() {
             <p><strong>Mouse</strong> - Steer your ship</p>
             <p><strong>Left Click</strong> - Fire starboard cannons</p>
             <p><strong>Right Click</strong> - Fire port cannons</p>
+            <p><strong>Hold B</strong> - Apply braking force without dropping anchor</p>
             <p><strong>Wind</strong> - Sail with the wind for speed, against it for control</p>
             <p><strong>Avoid</strong> - Islands, rocks, and the Kraken</p>
             <p><strong>Defeat</strong> - The enemy ship, then face the Kraken</p>
@@ -3559,7 +3770,7 @@ function startGame() {
             </div>
           </div>
           {ui.shopMessage ? <div className="shop-message">{ui.shopMessage}</div> : null}
-          <button className="leave-btn" onClick={() => actionsRef.current.closeShop()}>Set Sail</button>
+          <button className="leave-btn" onClick={() => actionsRef.current.closeShop()}>Leave Port</button>
           <div className="shop-hint">Press A to raise anchor and sail</div>
         </div>
       ) : null}

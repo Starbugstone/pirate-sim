@@ -13,6 +13,13 @@ canvas {
   display: block;
 }
 
+.wind-overlay-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
 /* Enemy indicators */
 .indicators {
   position: absolute;

@@ -35,6 +35,7 @@ export const controls = [
   ['Mouse', 'Steer the ship'],
   ['Left click', 'Fire starboard cannons'],
   ['Right click', 'Fire port cannons'],
+  ['Hold B', 'Apply heavy braking force without dropping anchor'],
   ['A', 'Drop or raise anchor'],
   ['Scroll', 'Switch camera distance and combat view']
 ]

@@ -97,8 +97,8 @@ const showShopMessage = (msg) => {
   setTimeout(() => { if (shopMessage.value === msg) shopMessage.value = '' }, 2500)
 }
 
-// Wind particles (GPU Points â€” single draw call, no per-particle JS objects)
-const MAX_WIND_PARTICLES = 35
+// Wind particles rendered as a lightweight point field around the player.
+const MAX_WIND_PARTICLES = 120
 let windParticles
 let debugWindArrow
 let windParticlePositions
@@ -181,7 +181,7 @@ let worldObjects = { islands: [], rocks: [], ships: [] }
 
 // Ocean (GPU shader - no CPU trig)
 let oceanMesh
-const OCEAN_SEGMENTS = 25 // 25x25 = 625 vertices â€” GPU handles all animation
+const OCEAN_SEGMENTS = 80
 
 const showMessage = (msg, duration = 3000) => {
   message.value = msg
@@ -215,9 +215,6 @@ function disposeGroup(group) {
   scene.remove(group)
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// GPU OCEAN â€” all animation on GPU, zero CPU trig
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 const oceanVertexShader = `
   uniform float uTime;
   varying vec2 vUv;
@@ -226,10 +223,9 @@ const oceanVertexShader = `
   void main() {
     vUv = uv;
     vec3 pos = position;
-    // Strong wave displacement so it's clearly visible
-    float wave1 = sin(pos.x * 0.01 + uTime * 0.5) * cos(pos.y * 0.008 + uTime * 0.4) * 6.0;
-    float wave2 = sin(pos.x * 0.02 + uTime * 0.8) * cos(pos.y * 0.015 + uTime * 0.6) * 3.0;
-    float wave3 = sin((pos.x + pos.y) * 0.005 + uTime * 0.3) * 4.0;
+    float wave1 = sin(pos.x * 0.012 + uTime * 1.1) * cos(pos.y * 0.010 + uTime * 0.9) * 8.0;
+    float wave2 = sin(pos.x * 0.026 - uTime * 1.7) * cos(pos.y * 0.022 + uTime * 1.3) * 4.5;
+    float wave3 = sin((pos.x + pos.y) * 0.008 + uTime * 0.7) * 3.5;
     pos.z = wave1 + wave2 + wave3;
     vElevation = pos.z;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -239,23 +235,25 @@ const oceanFragmentShader = `
   uniform float uTime;
   varying vec2 vUv;
   varying float vElevation;
+
   void main() {
-    // High contrast: deep blue troughs, bright blue-green peaks
     vec3 deep = vec3(0.02, 0.12, 0.35);
-    vec3 mid = vec3(0.0, 0.35, 0.55);
-    vec3 crest = vec3(0.15, 0.65, 0.75);
-    float t = clamp((vElevation + 10.0) / 20.0, 0.0, 1.0);
+    vec3 mid = vec3(0.01, 0.32, 0.58);
+    vec3 crest = vec3(0.28, 0.72, 0.82);
+    float t = clamp((vElevation + 14.0) / 28.0, 0.0, 1.0);
     vec3 color = mix(deep, mid, smoothstep(0.0, 0.5, t));
     color = mix(color, crest, smoothstep(0.5, 1.0, t));
-    // Bright shimmer on crests
-    float shimmer = pow(max(0.0, vElevation / 10.0), 2.0) * 0.3;
-    color += shimmer * vec3(0.5, 0.8, 0.9);
+    float foamBands = sin(vUv.x * 36.0 + uTime * 1.8) * sin(vUv.y * 30.0 - uTime * 1.2);
+    float foam = smoothstep(0.15, 0.95, t) * max(foamBands, 0.0) * 0.25;
+    float shimmer = pow(max(0.0, vElevation / 11.0), 2.0) * 0.38;
+    color += foam * vec3(0.7, 0.85, 0.9);
+    color += shimmer * vec3(0.45, 0.72, 0.82);
     gl_FragColor = vec4(color, 1.0);
   }
 `
 
 function createOcean() {
-  const geometry = new THREE.PlaneGeometry(1500, 1500, OCEAN_SEGMENTS, OCEAN_SEGMENTS)
+  const geometry = new THREE.PlaneGeometry(2200, 2200, OCEAN_SEGMENTS, OCEAN_SEGMENTS)
   const material = new THREE.ShaderMaterial({
     vertexShader: oceanVertexShader,
     fragmentShader: oceanFragmentShader,
@@ -266,7 +264,7 @@ function createOcean() {
   })
   oceanMesh = new THREE.Mesh(geometry, material)
   oceanMesh.rotation.x = -Math.PI / 2
-  oceanMesh.position.y = -0.5
+  oceanMesh.position.y = -1.1
   oceanMesh.renderOrder = 0
   scene.add(oceanMesh)
 }
@@ -277,25 +275,28 @@ function createWindParticles() {
   windParticleVels = new Float32Array(count)
   
   for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2
-    const radius = Math.random() * 35
-    windParticlePositions[i * 3] = Math.cos(angle) * radius
-    windParticlePositions[i * 3 + 1] = 2 + Math.random() * 8
-    windParticlePositions[i * 3 + 2] = Math.sin(angle) * radius
+    const driftX = Math.sin(windAngle)
+    const driftZ = Math.cos(windAngle)
+    const side = (Math.random() - 0.5) * 60
+    const startDist = 12 + Math.random() * 45
+    windParticlePositions[i * 3] = playerPos.value.x - driftX * startDist + driftZ * side
+    windParticlePositions[i * 3 + 1] = 4 + Math.random() * 12
+    windParticlePositions[i * 3 + 2] = playerPos.value.z - driftZ * startDist - driftX * side
     windParticleLifetimes[i] = Math.random()
-    windParticleVels[i] = 0.5 + Math.random() * 0.8
+    windParticleVels[i] = 0.7 + Math.random() * 1.0
   }
   
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(windParticlePositions, 3))
   const material = new THREE.PointsMaterial({
-    color: 0xffffff,
-    size: 2.5,
+    color: 0xdff6ff,
+    size: 4.5,
     transparent: true,
-    opacity: 0.8,
+    opacity: 0.95,
     sizeAttenuation: true,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
+    depthTest: false,
     fog: false
   })
   windParticles = new THREE.Points(geometry, material)
@@ -313,22 +314,23 @@ function updateWindParticles(dt) {
     windParticleLifetimes[i] -= dt * 0.4
     
     if (windParticleLifetimes[i] <= 0) {
-      const spread = Math.random() * Math.PI * 2
-      const radius = 5 + Math.random() * 30
-      windParticlePositions[i * 3] = Math.cos(spread) * radius + playerPos.value.x
-      windParticlePositions[i * 3 + 1] = 2 + Math.random() * 8
-      windParticlePositions[i * 3 + 2] = Math.sin(spread) * radius + playerPos.value.z
+      const driftX = Math.sin(windAngle)
+      const driftZ = Math.cos(windAngle)
+      const side = (Math.random() - 0.5) * 65
+      const startDist = 18 + Math.random() * 48
+      windParticlePositions[i * 3] = playerPos.value.x - driftX * startDist + driftZ * side
+      windParticlePositions[i * 3 + 1] = 4 + Math.random() * 12
+      windParticlePositions[i * 3 + 2] = playerPos.value.z - driftZ * startDist - driftX * side
       windParticleLifetimes[i] = 1.5 + Math.random() * 1.5
-      windParticleVels[i] = 0.5 + Math.random() * 0.8
+      windParticleVels[i] = 0.7 + Math.random() * 1.0
     } else {
       windParticlePositions[i * 3] += Math.sin(windAngle) * speed * windParticleVels[i] * dt
       windParticlePositions[i * 3 + 2] += Math.cos(windAngle) * speed * windParticleVels[i] * dt
     }
     
-    // Keep near player (use player-relative positions so they stay close)
     const relX = windParticlePositions[i * 3] - playerPos.value.x
     const relZ = windParticlePositions[i * 3 + 2] - playerPos.value.z
-    if (relX * relX + relZ * relZ > 60 * 60) windParticleLifetimes[i] = 0
+    if (relX * relX + relZ * relZ > 85 * 85) windParticleLifetimes[i] = 0
   }
   
   windParticles.geometry.attributes.position.needsUpdate = true
@@ -768,7 +770,7 @@ function spawnEnemyShip() {
     enemyShipMeshes.push(mesh)
   })
 
-  showMessage('âš”ï¸ 3 Enemy ships approaching!', 3000)
+  showMessage('3 enemy ships approaching!', 3000)
 }
 
 function createEnemyShipMesh(shipType) {
@@ -991,7 +993,7 @@ function createKraken() {
   krakenActive = true
   kraken.value.hp = 200
 
-  showMessage('ðŸ’€ THE KRAKEN AWAKENS!', 5000)
+  showMessage('The Kraken awakens!', 5000)
 }
 
 // Treasure functions
@@ -1041,7 +1043,7 @@ function spawnTreasure(x, z, baseGold = 50, showMsg = true) {
   treasures.value.push(treasureEntity)
 
   if (showMsg) {
-    showMessage('ðŸ’° Treasure spawned! Drop anchor to collect!', 3000)
+    showMessage('Treasure spawned. Drop anchor to collect it.', 3000)
   }
 }
 
@@ -1146,7 +1148,7 @@ function checkProceduralSpawns() {
         krakenMesh = null
       }
       createKraken()
-      showMessage('ðŸ’€ A new Kraken approaches...', 3000)
+      showMessage('A new Kraken approaches...', 3000)
     }
   }
 }
@@ -1555,7 +1557,7 @@ function updateTreasure(dt) {
       // Start collecting
       t.collecting = true
       treasureCollectTimer = 3
-      showMessage('ðŸ’° Collecting treasure...', 2000)
+      showMessage('Collecting treasure...', 2000)
     }
 
     // Handle collecting state - shrink the ring and count down
@@ -1575,7 +1577,7 @@ function updateTreasure(dt) {
         // Collected!
         const coins = t.gold || 50
         gold.value += coins
-        showMessage(`ðŸ’° +${coins} Gold!`, 3000)
+        showMessage(`+${coins} gold`, 3000)
 
         // Start fade out animation
         t.collected = true
@@ -1597,7 +1599,7 @@ function updateTreasure(dt) {
 
     // Expired treasure - fade out and sink
     if (t.timer <= 0) {
-      showMessage('ðŸ’¨ Treasure lost to the sea...', 2000)
+      showMessage('Treasure lost to the sea...', 2000)
       // Fade out and sink
       t.collected = true
       t.collectFade = 1.0
@@ -1685,7 +1687,7 @@ function fireCannon(side) {
   }
 
   const sideName = side === 'port' ? 'PORT (LEFT)' : (side === 'starboard' ? 'STARBOARD (RIGHT)' : 'BROADSIDE')
-  showMessage(`ðŸ’¥ ${sideName} FIRE!`, 1000)
+  showMessage(`${sideName} broadside fired`, 1000)
 }
 
 function fireEnemyCannon() {
@@ -1789,9 +1791,9 @@ function updateCannonballs(dt) {
           enemy.hp -= damage
 
           if (ball.isPlayer) {
-            showMessage(`ðŸ’¥ Hit ${shipType.name}!`)
+            showMessage(`Hit ${shipType.name}`)
           } else {
-            showMessage(`ðŸ’¥ Enemy fire hit ${shipType.name}!`)
+            showMessage(`Enemy fire hit ${shipType.name}`)
           }
 
           disposeMesh(ball.mesh)
@@ -1807,7 +1809,7 @@ function updateCannonballs(dt) {
       const dz = ball.mesh.position.z - kraken.value.z
       if (Math.sqrt(dx * dx + dz * dz) < 10) {
         kraken.value.hp -= 5
-        showMessage('ðŸ’¥ Hit the Kraken!')
+        showMessage('Hit the Kraken!')
         if (kraken.value.hp <= 0) {
           victory.value = true
           gameState.value = 'gameover'
@@ -1827,7 +1829,7 @@ function updateCannonballs(dt) {
       if (Math.sqrt(pdx * pdx + pdz * pdz) < 3) {
         const damage = ball.damage || 10
         hp.value -= damage
-        showMessage('ðŸ’¥ You were hit!')
+        showMessage('You were hit!')
         disposeMesh(ball.mesh)
         cannonballs.splice(i, 1)
         if (hp.value <= 0) {
@@ -1869,9 +1871,9 @@ function onPointerLockChange() {
   pointerLocked = document.pointerLockElement !== null
   if (pointerLocked) {
     mouseDeltaX = 0 // Reset on lock
-    showMessage('ðŸŽ¯ Pointer locked - move mouse to steer', 2000)
+    showMessage('Pointer locked - move mouse to steer', 2000)
   } else {
-    showMessage('âš ï¸ Pointer unlocked - click to re-lock', 2000)
+    showMessage('Pointer unlocked - click to re-lock', 2000)
   }
 }
 
@@ -1917,9 +1919,9 @@ function onWheel(e) {
     cameraMode = Math.max(0, cameraMode - 0.1)
   }
 
-  const modeNames = ['ðŸš¢ Navigation', 'âš”ï¸ Combat']
+  const modeNames = ['Navigation', 'Combat']
   const currentMode = cameraMode > 0.5 ? 1 : 0
-  showMessage(`ðŸ“· ${modeNames[currentMode]} view`, 1500)
+  showMessage(`${modeNames[currentMode]} view`, 1500)
 }
 
 function onKeyDown(e) {
@@ -1932,7 +1934,7 @@ function onKeyDown(e) {
 
     if (!anchorDropped) {
       // Drop anchor
-      showMessage('âš“ Dropping anchor...', 1500)
+      showMessage('Dropping anchor...', 1500)
 
       // Create anchor mesh if not exists
       if (!anchorMesh) {
@@ -1944,20 +1946,20 @@ function onKeyDown(e) {
         anchorDropped = true
         anchorAnimating = false
         playerSpeed.value = 0 // Stop forward momentum
-        showMessage('âš“ Anchor dropped!', 1500)
+        showMessage('Anchor dropped', 1500)
         // Check if near a harbour
         checkHarbourEntry()
       }, 1000)
     } else {
       // Raise anchor
-      showMessage('âš“ Raising anchor...', 1500)
+      showMessage('Raising anchor...', 1500)
 
       // Animate anchor raising (1 second)
       setTimeout(() => {
         anchorDropped = false
         anchorAnimating = false
         playerSpeed.value = 0.5 // Start with slow speed
-        showMessage('âš“ Anchor raised!', 1500)
+        showMessage('Anchor raised', 1500)
       }, 1000)
     }
   }
@@ -2013,7 +2015,7 @@ function checkHarbourEntry() {
     if (dist < HARBOUR_RANGE) {
       shopOpen.value = true
       shopMessage.value = ''
-      showMessage('ðŸ´â€â˜ ï¸ Welcome to port!', 3000)
+      showMessage('Welcome to port', 3000)
       return
     }
   }
@@ -2030,51 +2032,51 @@ function buyUpgrade(type) {
   if (type === 'repairHaul') {
     const cost = 100 + playerUpgrades.value.repairCount * 10
     if (gold.value < cost) {
-      showShopMessage(`ðŸ’° Not enough gold! Need ${cost}`)
+      showShopMessage(`Not enough gold. Need ${cost}`)
       return
     }
     gold.value -= cost
     playerUpgrades.value.repairCount++
     const maxHp = 100 + playerUpgrades.value.maxHpBonus * 10
     hp.value = Math.min(maxHp, hp.value + 10)
-    showShopMessage(`âœ… Repaired! +10 HP for ${cost}g`)
+    showShopMessage(`Repaired: +10 HP for ${cost}g`)
     return
   }
 
   if (type === 'maxHpBonus') {
     const current = playerUpgrades.value.maxHpBonus
     if (current >= 5) {
-      showShopMessage('âš“ Max level reached!')
+      showShopMessage('Max level reached')
       return
     }
     const nextLevel = current + 1
     const cost = costs.maxHpBonus[nextLevel]
     if (gold.value < cost) {
-      showShopMessage(`ðŸ’° Not enough gold! Need ${cost}`)
+      showShopMessage(`Not enough gold. Need ${cost}`)
       return
     }
     gold.value -= cost
     playerUpgrades.value.maxHpBonus = nextLevel
     const newMaxHp = 100 + nextLevel * 10
     hp.value = newMaxHp // Full heal on upgrade
-    showShopMessage(`âœ… Max HP +10! Now ${newMaxHp} HP`)
+    showShopMessage(`Max HP +10. Now ${newMaxHp} HP`)
     return
   }
 
   const current = playerUpgrades.value[type]
   if (current >= 3) {
-    showShopMessage('âš“ Max level reached!')
+    showShopMessage('Max level reached')
     return
   }
   const nextLevel = current + 1
   const cost = costs[type][nextLevel]
   if (gold.value < cost) {
-    showShopMessage(`ðŸ’° Not enough gold! Need ${cost}`)
+    showShopMessage(`Not enough gold. Need ${cost}`)
     return
   }
   gold.value -= cost
   playerUpgrades.value[type] = nextLevel
-  showShopMessage(`âœ… Upgraded ${type} to level ${nextLevel}!`)
+  showShopMessage(`Upgraded ${type} to level ${nextLevel}`)
 }
 
 function closeShop() {
@@ -2430,7 +2432,7 @@ function update(dt) {
     targetWindAngle = windAngle + shiftAmount
     targetWindSpeed = 2 + Math.random() * 5
     windChangeTimer = 12 + Math.random() * 5 // Changes every 12-17 seconds
-    showMessage(`ðŸ’¨ Wind shifting...`, 2000)
+    showMessage('Wind shifting...', 2000)
   }
 
   // Gradually transition wind angle (4 second transition)
@@ -2537,7 +2539,7 @@ function update(dt) {
     const dz = playerPos.value.z - island.z
     if (Math.sqrt(dx * dx + dz * dz) < island.radius + 3) {
       hp.value -= 20 * dt
-      showMessage('ðŸª¨ Hit an island!')
+      showMessage('Hit an island!')
     }
   }
 
@@ -2547,7 +2549,7 @@ function update(dt) {
     const dz = playerPos.value.z - rock.z
     if (Math.sqrt(dx * dx + dz * dz) < rock.radius + 2) {
       hp.value -= 30 * dt
-      showMessage('ðŸª¨ Hit a rock!')
+      showMessage('Hit a rock!')
     }
   }
 
@@ -2713,7 +2715,7 @@ function update(dt) {
         enemy.z += Math.cos(pushAngle) * 2
       }
       if (Math.random() < 0.05) {
-        showMessage(`ðŸ’¥ ${enemy.type} scraped a rock!`, 1000)
+        showMessage(`${enemy.type} scraped a rock`, 1000)
       }
     }
 
@@ -2763,7 +2765,7 @@ function update(dt) {
       enemy.z -= Math.cos(enemy.angle) * 2
 
       const typeName = enemy.type === 'RAMMER' ? 'Ramming ship' : (enemy.type === 'BIG' ? 'Galleon' : 'Sloop')
-      showMessage(`âš”ï¸ Collision with ${typeName}!`)
+      showMessage(`Collision with ${typeName}`)
     }
 
     // Enemy fires only when attacking and in range
@@ -2811,7 +2813,7 @@ function update(dt) {
         e2.x -= Math.sin(angle) * 3
         e2.z -= Math.cos(angle) * 3
 
-        showMessage('ðŸ’¥ Enemy ships collided!')
+        showMessage('Enemy ships collided')
       }
     }
   }
@@ -2831,7 +2833,7 @@ function update(dt) {
         const angle = Math.atan2(dx, dz)
         enemy.x += Math.sin(angle) * 5
         enemy.z += Math.cos(angle) * 5
-        showMessage(`ðŸ’¥ ${shipType.name} hit an island!`)
+        showMessage(`${shipType.name} hit an island`)
       }
     }
 
@@ -2845,7 +2847,7 @@ function update(dt) {
         const angle = Math.atan2(dx, dz)
         enemy.x += Math.sin(angle) * 3
         enemy.z += Math.cos(angle) * 3
-        showMessage(`ðŸ’¥ ${shipType.name} hit a rock!`)
+        showMessage(`${shipType.name} hit a rock`)
       }
     }
   })
@@ -2857,7 +2859,7 @@ function update(dt) {
       enemy.sinking = true
       enemy.sinkingTime = 0
       const shipType = SHIP_TYPES[enemy.type]
-      showMessage(`ðŸ’€ ${shipType.name} sinking!`)
+      showMessage(`${shipType.name} is sinking`)
     }
 
     if (enemy.sinking) {
@@ -2890,7 +2892,7 @@ function update(dt) {
   // Check if all enemies are gone (including sinking)
   if (enemyShips.value.length === 0 && enemyShipMeshes.length === 0 && !krakenActive) {
     gold.value += 200
-    showMessage('ðŸ’° All enemies destroyed! +200 Gold')
+    showMessage('All enemies destroyed. +200 gold')
 
     // [KRAKEN DISABLED]
     // setTimeout(() => {
@@ -3032,9 +3034,9 @@ function update(dt) {
           if (isHit || playerHitDist < 8) {
             // Hit!
             hp.value -= 40
-            showMessage('ðŸ’€ TENTACLE SMASH!')
+            showMessage('Tentacle smash!')
           } else {
-            showMessage('ðŸ’€ Tentacle missed!')
+            showMessage('Tentacle missed')
           }
         }
         // Reset
@@ -3090,7 +3092,7 @@ function update(dt) {
     // Body collision
     if (dist < 15) {
       hp.value -= 20 * dt
-      showMessage('ðŸ’€ KRAKEN CONTACT!')
+      showMessage('Kraken contact!')
     }
   }
 
@@ -3167,7 +3169,7 @@ function updateEnemyIndicators() {
         x: Math.max(10, Math.min(90, screenX)),
         y: Math.max(10, Math.min(90, screenY)),
         angle: angleToEnemy,
-        icon: enemy.type === 'RAMMER' ? 'âš”ï¸' : (enemy.type === 'BIG' ? 'ðŸ´â€â˜ ï¸' : 'â›µ'),
+        icon: enemy.type === 'RAMMER' ? 'R' : (enemy.type === 'BIG' ? 'G' : 'S'),
         label: `${enemy.type} (${Math.round(dist)}m)`,
         hpPercent: enemy.hp / enemy.maxHp
       })
@@ -3189,7 +3191,7 @@ function updateEnemyIndicators() {
         x: Math.max(10, Math.min(90, screenX)),
         y: Math.max(10, Math.min(90, screenY)),
         angle: -angleToKraken,
-        icon: 'ðŸ™',
+        icon: 'K',
         label: `KRAKEN (${Math.round(dist)}m)`
       })
     }
@@ -3301,6 +3303,7 @@ function startGame() {
     disposeMesh(windParticles)
     windParticles = null
   }
+  createWindParticles()
   spawnCheckFrameCounter = 0
   fireEffectsFrameCounter = 0
   indicatorsFrameCounter = 0
@@ -3356,7 +3359,7 @@ function startGame() {
 
   victory.value = false
   gameState.value = 'playing'
-  showMessage('âš”ï¸ Battle commenced!', 3000)
+  showMessage('Battle commenced', 3000)
 }
 
     const publishUi = () => {

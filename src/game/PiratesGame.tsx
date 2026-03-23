@@ -1,7 +1,19 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import './pirates.css'
+import {
+  SHIP_TYPES, MAX_TREASURES, MAX_CANNONBALLS, MAX_ISLANDS, MAX_ROCKS,
+  MAX_DISPOSE_PER_FRAME, MAX_WIND_PARTICLES, CHUNK_SIZE, HARBOUR_RANGE,
+  ICON_RENDER_DIST, INACTIVE_DIST, ACTIVE_DIST, KRAKEN_INACTIVE_DIST,
+  KRAKEN_RENDER_DIST, CANNONBALL_CULL_DIST, ENEMY_IDLE_DIST,
+  ENEMY_ALERT_DIST, ENEMY_ATTACK_DIST
+} from './constants'
+import { normalizeAngle, shortestAngleDelta } from './helpers'
+import { createOcean, updateOcean, getOceanHeight, createSprayPool, emitSpray, updateSpray } from './ocean'
+import { createPlayerShip as buildPlayerShip, createEnemyShipMesh } from './ships'
+import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
+import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake } from './effects'
 const makeRef = (value) => ({ value })
 const computed = (getter) => ({
   get value() {
@@ -108,7 +120,6 @@ const showShopMessage = (msg) => {
 }
 
 // Wind particles rendered on a lightweight overlay canvas.
-const MAX_WIND_PARTICLES = 280
 let windParticles = []
 let debugWindArrow
 let windParticleContext = null
@@ -122,12 +133,6 @@ const windCrossVector = new THREE.Vector3()
 const windHeadProjection = new THREE.Vector3()
 const windTailProjection = new THREE.Vector3()
 const windTailWorld = new THREE.Vector3()
-const MAX_TREASURES = 10
-const MAX_CANNONBALLS = 40
-const MAX_WAKE_PARTICLES = 35
-const MAX_ISLANDS = 15  // Max islands to keep loaded
-const MAX_ROCKS = 30   // Max rocks to keep loaded
-const MAX_DISPOSE_PER_FRAME = 3 // Spread disposal across frames to avoid lag spikes
 let disposeQueue = [] // Pending { mesh, type } for gradual disposal
 let lastChunkCount = 0
 let spawnCheckFrameCounter = 0
@@ -171,18 +176,12 @@ let cannonballs = []
 
 // Ship wake/trail particles
 let playerWake = []
-const maxWakeParticles = 50
 
 // Enemy ships - array for multiple enemies
 const enemyShips = ref([]) // { x, z, hp, maxHp, angle, type, mesh }
 let enemyShipMeshes = [] // Array of meshes
 
 // Enemy ship types
-const SHIP_TYPES = {
-  RAMMER: { name: 'Rammer', hp: 150, speed: 10, turnSpeed: 0.5, rammingDamage: 20, cannonDamage: 5, color: 0x333333, size: 1.2 },
-  NORMAL: { name: 'Sloop', hp: 80, speed: 6, turnSpeed: 2.0, rammingDamage: 10, cannonDamage: 10, color: 0x8B0000, size: 1.0 },
-  BIG: { name: 'Galleon', hp: 200, speed: 4, turnSpeed: 1.0, rammingDamage: 10, cannonDamage: 15, color: 0x000080, size: 1.8 }
-}
 
 // Kraken
 const kraken = ref({ x: 0, z: 0, hp: 150, angle: 0, tentacles: [] })
@@ -199,9 +198,9 @@ let rocks = []
 let spawnedChunks = new Set() // Track spawned areas "x,z"
 let worldObjects = { islands: [], rocks: [], ships: [] }
 
-// Ocean (GPU shader - no CPU trig)
 let oceanMesh
-const OCEAN_SEGMENTS = 64
+let oceanTime = 0
+let sprayPool
 
 const showMessage = (msg, duration = 3000) => {
   message.value = msg
@@ -210,15 +209,6 @@ const showMessage = (msg, duration = 3000) => {
   }, duration)
 }
 
-function normalizeAngle(angle) {
-  while (angle > Math.PI) angle -= Math.PI * 2
-  while (angle < -Math.PI) angle += Math.PI * 2
-  return angle
-}
-
-function shortestAngleDelta(from, to) {
-  return normalizeAngle(to - from)
-}
 
 // === MEMORY MANAGEMENT ===
 function disposeMesh(mesh) {
@@ -243,60 +233,6 @@ function disposeGroup(group) {
     if (child.isMesh) disposeMesh(child)
   })
   scene.remove(group)
-}
-
-const oceanVertexShader = `
-  uniform float uTime;
-  varying vec2 vUv;
-  varying float vElevation;
-  
-  void main() {
-    vUv = uv;
-    vec3 pos = position;
-    float wave1 = sin(pos.x * 0.012 + uTime * 1.1) * cos(pos.y * 0.010 + uTime * 0.9) * 8.0;
-    float wave2 = sin(pos.x * 0.026 - uTime * 1.7) * cos(pos.y * 0.022 + uTime * 1.3) * 4.5;
-    float wave3 = sin((pos.x + pos.y) * 0.008 + uTime * 0.7) * 3.5;
-    pos.z = wave1 + wave2 + wave3;
-    vElevation = pos.z;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-  }
-`
-const oceanFragmentShader = `
-  uniform float uTime;
-  varying vec2 vUv;
-  varying float vElevation;
-
-  void main() {
-    vec3 deep = vec3(0.02, 0.12, 0.35);
-    vec3 mid = vec3(0.01, 0.32, 0.58);
-    vec3 crest = vec3(0.28, 0.72, 0.82);
-    float t = clamp((vElevation + 14.0) / 28.0, 0.0, 1.0);
-    vec3 color = mix(deep, mid, smoothstep(0.0, 0.5, t));
-    color = mix(color, crest, smoothstep(0.5, 1.0, t));
-    float foamBands = sin(vUv.x * 36.0 + uTime * 1.8) * sin(vUv.y * 30.0 - uTime * 1.2);
-    float foam = smoothstep(0.15, 0.95, t) * max(foamBands, 0.0) * 0.25;
-    float shimmer = pow(max(0.0, vElevation / 11.0), 2.0) * 0.38;
-    color += foam * vec3(0.7, 0.85, 0.9);
-    color += shimmer * vec3(0.45, 0.72, 0.82);
-    gl_FragColor = vec4(color, 1.0);
-  }
-`
-
-function createOcean() {
-  const geometry = new THREE.PlaneGeometry(2200, 2200, OCEAN_SEGMENTS, OCEAN_SEGMENTS)
-  const material = new THREE.ShaderMaterial({
-    vertexShader: oceanVertexShader,
-    fragmentShader: oceanFragmentShader,
-    uniforms: { uTime: { value: 0 } },
-    transparent: true,
-    side: THREE.DoubleSide,
-    fog: false
-  })
-  oceanMesh = new THREE.Mesh(geometry, material)
-  oceanMesh.rotation.x = -Math.PI / 2
-  oceanMesh.position.y = -1.1
-  oceanMesh.renderOrder = 0
-  scene.add(oceanMesh)
 }
 
 function resizeWindOverlay() {
@@ -526,9 +462,10 @@ function init() {
   const sunLight = new THREE.DirectionalLight(0xffffcc, 1)
   sunLight.position.set(50, 100, 50)
   scene.add(sunLight)
-  createSky()
-  createPlayerShip()
-  createOcean()
+  createSky(scene)
+  createPlayerShipLocal()
+  oceanMesh = createOcean(scene)
+  sprayPool = createSprayPool(scene)
   createWindParticles()
   spawnEnemyShip()
   window.addEventListener('resize', onResize)
@@ -546,301 +483,8 @@ function init() {
 
 
 
-function createSky() {
-  // Sun
-  const sunGeometry = new THREE.CircleGeometry(10, 32)
-  const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 })
-  const sun = new THREE.Mesh(sunGeometry, sunMaterial)
-  sun.position.set(100, 80, -100)
-  sun.lookAt(0, 0, 0)
-  scene.add(sun)
-
-  // [CLOUDS DISABLED] - too heavy, can re-enable later with optimization
-  // Reduced from 20 clouds x 5 spheres = 100 meshes to just 5 simple clouds
-  // if (false) { // Cloud toggle
-  //   for (let i = 0; i < 20; i++) { ... }
-  // }
-}
-
-function createPlayerShip() {
-  playerShip = new THREE.Group()
-
-  // === IMPROVED HULL - Tapered shape ===
-  // Main hull body (tapered)
-  const hullShape = new THREE.Shape()
-  hullShape.moveTo(-1.5, -4)
-  hullShape.lineTo(1.5, -4)
-  hullShape.lineTo(1.8, 0)
-  hullShape.lineTo(1.5, 4)
-  hullShape.lineTo(-1.5, 4)
-  hullShape.lineTo(-1.8, 0)
-  hullShape.closePath()
-
-  const extrudeSettings = { depth: 2, bevelEnabled: true, bevelThickness: 0.2, bevelSize: 0.1, bevelSegments: 2 }
-  const hullGeometry = new THREE.ExtrudeGeometry(hullShape, extrudeSettings)
-  const hullMaterial = new THREE.MeshPhongMaterial({ color: 0x5C3317 }) // Darker wood
-  const hull = new THREE.Mesh(hullGeometry, hullMaterial)
-  hull.rotation.x = -Math.PI / 2
-  hull.position.y = 0.5
-  playerShip.add(hull)
-
-  // Hull stripe (decorative)
-  const stripeGeometry = new THREE.BoxGeometry(3.2, 0.15, 8.5)
-  const stripeMaterial = new THREE.MeshPhongMaterial({ color: 0x8B0000 }) // Red stripe
-  const stripe = new THREE.Mesh(stripeGeometry, stripeMaterial)
-  stripe.position.y = 1.3
-  playerShip.add(stripe)
-
-  // Deck with planks effect
-  const deckGeometry = new THREE.BoxGeometry(2.8, 0.25, 7.5)
-  const deckMaterial = new THREE.MeshPhongMaterial({ color: 0xDEB887 }) // Burlywood
-  const deck = new THREE.Mesh(deckGeometry, deckMaterial)
-  deck.position.y = 2.1
-  playerShip.add(deck)
-
-  // === RAILINGS ===
-  const railMaterial = new THREE.MeshPhongMaterial({ color: 0x3D2817 })
-  // Port side railing
-  for (let i = 0; i < 8; i++) {
-    const railPost = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1), railMaterial)
-    railPost.position.set(-1.3, 2.7, -3 + i * 0.85)
-    playerShip.add(railPost)
-  }
-  // Starboard side railing
-  for (let i = 0; i < 8; i++) {
-    const railPost = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1), railMaterial)
-    railPost.position.set(1.3, 2.7, -3 + i * 0.85)
-    playerShip.add(railPost)
-  }
-  // Railings top bar
-  const railBarGeom = new THREE.CylinderGeometry(0.03, 0.03, 7, 8)
-  const railBarL = new THREE.Mesh(railBarGeom, railMaterial)
-  railBarL.rotation.x = Math.PI / 2
-  railBarL.position.set(-1.3, 3.2, 0)
-  playerShip.add(railBarL)
-  const railBarR = new THREE.Mesh(railBarGeom, railMaterial)
-  railBarR.rotation.x = Math.PI / 2
-  railBarR.position.set(1.3, 3.2, 0)
-  playerShip.add(railBarR)
-
-  // === MASTS ===
-  const mastMaterial = new THREE.MeshPhongMaterial({ color: 0x4A3728 })
-
-  // Main mast - thicker
-  const mainMastGeom = new THREE.CylinderGeometry(0.25, 0.3, 12, 8)
-  const mainMast = new THREE.Mesh(mainMastGeom, mastMaterial)
-  mainMast.position.y = 7.5
-  playerShip.add(mainMast)
-
-  // Main mast crosstree (supports the yard)
-  const crosstreeGeom = new THREE.BoxGeometry(7, 0.15, 0.15)
-  const crosstree = new THREE.Mesh(crosstreeGeom, mastMaterial)
-  crosstree.position.set(0, 12.5, 0)
-  playerShip.add(crosstree)
-
-  // Crow's nest
-  const nestGeom = new THREE.CylinderGeometry(0.5, 0.6, 0.4, 8, 1, true)
-  const nest = new THREE.Mesh(nestGeom, railMaterial)
-  nest.position.set(0, 13, 0)
-  playerShip.add(nest)
-  // Nest floor
-  const nestFloorGeom = new THREE.CircleGeometry(0.55, 8)
-  const nestFloor = new THREE.Mesh(nestFloorGeom, deckMaterial)
-  nestFloor.rotation.x = -Math.PI / 2
-  nestFloor.position.y = -0.2
-  nest.add(nestFloor)
-
-  // Fore mast
-  const foreMastGeom = new THREE.CylinderGeometry(0.18, 0.22, 7, 8)
-  const foreMast = new THREE.Mesh(foreMastGeom, mastMaterial)
-  foreMast.position.set(0, 5, -2.5)
-  playerShip.add(foreMast)
-
-  // Mizzen mast (rear)
-  const mizzenMastGeom = new THREE.CylinderGeometry(0.12, 0.15, 5, 8)
-  const mizzenMast = new THREE.Mesh(mizzenMastGeom, mastMaterial)
-  mizzenMast.position.set(0, 4.5, 2.5)
-  playerShip.add(mizzenMast)
-
-  // === FIGUREHEAD (bow decoration) ===
-  const figureheadMat = new THREE.MeshPhongMaterial({ color: 0xD2691E })
-  // Dragon head
-  const dragonHead = new THREE.Group()
-  const headGeom = new THREE.ConeGeometry(0.4, 1.2, 6)
-  const head = new THREE.Mesh(headGeom, figureheadMat)
-  head.rotation.x = Math.PI / 2
-  head.position.z = 0.4
-  dragonHead.add(head)
-  // Snout
-  const snoutGeom = new THREE.ConeGeometry(0.2, 0.5, 6)
-  const snout = new THREE.Mesh(snoutGeom, figureheadMat)
-  snout.rotation.x = -Math.PI / 2
-  snout.position.set(0, 0, 1)
-  dragonHead.add(snout)
-  dragonHead.position.set(0, 1.8, 4.5)
-  playerShip.add(dragonHead)
-
-  // === STERN DECORATION ===
-  const sternMat = new THREE.MeshPhongMaterial({ color: 0x8B4513 })
-  const sternPanel = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.5, 0.1), sternMat)
-  sternPanel.position.set(0, 2.8, -4)
-  playerShip.add(sternPanel)
-
-  // === WHITE SAILS THAT REACT TO WIND - SQUARE RIG STYLE ===
-  // Sails have yards (spars) at top and bottom, sides billow outward
-
-  // Main sail - 3D yard arms
-  const mainSailGroup = new THREE.Group()
-
-  // Top yard (horizontal spar)
-  const topYardGeom = new THREE.CylinderGeometry(0.08, 0.08, 6, 8)
-  const yardMat = new THREE.MeshPhongMaterial({ color: 0x654321 })
-  const topYard = new THREE.Mesh(topYardGeom, yardMat)
-  topYard.rotation.z = Math.PI / 2
-  topYard.position.y = 3.5
-  mainSailGroup.add(topYard)
-
-  // Bottom yard
-  const botYard = new THREE.Mesh(topYardGeom, yardMat)
-  botYard.rotation.z = Math.PI / 2
-  botYard.position.y = -3.5
-  mainSailGroup.add(botYard)
-
-  // The sail cloth - vertices organized so top row (y=max) and bottom row (y=min) stay fixed
-  const sailGeom = new THREE.PlaneGeometry(5.5, 7, 12, 14)
-  const sailMat = new THREE.MeshPhongMaterial({
-    color: 0xffffff,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.95
-  })
-  const sail = new THREE.Mesh(sailGeom, sailMat)
-  sail.position.set(0, 0, 0.05) // Slightly forward of yards
-  sail.userData.isSail = true
-  sail.userData.originalVertices = sailGeom.attributes.position.array.slice()
-  // Store info about which vertices are fixed (top and bottom edges)
-  const mainSailVerts = sailGeom.attributes.position
-  sail.userData.fixedEdges = []
-  for (let i = 0; i < mainSailVerts.count; i++) {
-    const y = mainSailVerts.getY(i)
-    // Top and bottom rows are fixed to yards
-    if (Math.abs(y - 3.5) < 0.1 || Math.abs(y + 3.5) < 0.1) {
-      sail.userData.fixedEdges.push(true)
-    } else {
-      sail.userData.fixedEdges.push(false)
-    }
-  }
-  mainSailGroup.add(sail)
-  mainSailGroup.position.set(0, 8, -1.5)
-  playerShip.add(mainSailGroup)
-
-  // Fore sail - 3D yard arms
-  const foreSailGroup = new THREE.Group()
-  const foreTopYardGeom = new THREE.CylinderGeometry(0.06, 0.06, 4, 8)
-  const foreTopYard = new THREE.Mesh(foreTopYardGeom, yardMat)
-  foreTopYard.rotation.z = Math.PI / 2
-  foreTopYard.position.y = 2
-  foreSailGroup.add(foreTopYard)
-  const foreBotYard = new THREE.Mesh(foreTopYardGeom, yardMat)
-  foreBotYard.rotation.z = Math.PI / 2
-  foreBotYard.position.y = -2
-  foreSailGroup.add(foreBotYard)
-  const foreSailGeom = new THREE.PlaneGeometry(3.5, 4, 10, 12)
-  const foreSailMat = new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
-  const foreSail = new THREE.Mesh(foreSailGeom, foreSailMat)
-  foreSail.position.set(0, 0, 0.05)
-  foreSail.userData.isSail = true
-  foreSail.userData.originalVertices = foreSailGeom.attributes.position.array.slice()
-  foreSail.userData.fixedEdges = []
-  for (let i = 0; i < foreSailGeom.attributes.position.count; i++) {
-    const y = foreSailGeom.attributes.position.getY(i)
-    foreSail.userData.fixedEdges.push(Math.abs(y - 2) < 0.1 || Math.abs(y + 2) < 0.1)
-  }
-  foreSailGroup.add(foreSail)
-  foreSailGroup.position.set(0, 5, -3)
-  playerShip.add(foreSailGroup)
-
-  // Mizzen sail - 3D yard arms
-  const mizzenGroup = new THREE.Group()
-  const mizzenTopYardGeom = new THREE.CylinderGeometry(0.05, 0.05, 3.5, 8)
-  const mizzenTopYard = new THREE.Mesh(mizzenTopYardGeom, yardMat)
-  mizzenTopYard.rotation.z = Math.PI / 2
-  mizzenTopYard.position.y = 1.75
-  mizzenGroup.add(mizzenTopYard)
-  const mizzenBotYard = new THREE.Mesh(mizzenTopYardGeom, yardMat)
-  mizzenBotYard.rotation.z = Math.PI / 2
-  mizzenBotYard.position.y = -1.75
-  mizzenGroup.add(mizzenBotYard)
-  const mizzenGeom = new THREE.PlaneGeometry(3, 3.5, 8, 10)
-  const mizzenMat = new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
-  const mizzen = new THREE.Mesh(mizzenGeom, mizzenMat)
-  mizzen.position.set(0, 0, 0.05)
-  mizzen.userData.isSail = true
-  mizzen.userData.originalVertices = mizzenGeom.attributes.position.array.slice()
-  mizzen.userData.fixedEdges = []
-  for (let i = 0; i < mizzenGeom.attributes.position.count; i++) {
-    const y = mizzenGeom.attributes.position.getY(i)
-    mizzen.userData.fixedEdges.push(Math.abs(y - 1.75) < 0.1 || Math.abs(y + 1.75) < 0.1)
-  }
-  mizzenGroup.add(mizzen)
-  mizzenGroup.position.set(0, 6, 1)
-  playerShip.add(mizzenGroup)
-
-  // Store sails for wind animation
-  playerShip.userData.sails = [sail, foreSail, mizzen]
-
-  // Store sails for wind animation
-  playerShip.userData.sails = [sail, foreSail, mizzen]
-
-  // Pirate flag
-  const flagGeometry = new THREE.PlaneGeometry(1.5, 1)
-  const flagMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 })
-  const flag = new THREE.Mesh(flagGeometry, flagMaterial)
-  flag.position.set(0, 12, 0)
-  flag.rotation.y = Math.PI / 2
-  playerShip.add(flag)
-
-  // Cannon ports - left side
-  for (let i = -1; i <= 1; i++) {
-    const portGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.3)
-    const portMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 })
-    const portL = new THREE.Mesh(portGeometry, portMaterial)
-    portL.position.set(-1.5, 1.5, i * 2)
-    portL.rotation.z = Math.PI / 2
-    playerShip.add(portL)
-
-    const portR = new THREE.Mesh(portGeometry, portMaterial)
-    portR.position.set(1.5, 1.5, i * 2)
-    portR.rotation.z = Math.PI / 2
-    playerShip.add(portR)
-  }
-
-  // Side cannons (port) - 3 cannons
-  const sideCannonGeom = new THREE.CylinderGeometry(0.15, 0.2, 1.2)
-  const sideCannonMat = new THREE.MeshPhongMaterial({ color: 0x333333 })
-
-  // Port side cannons - 3 cannons angled for cone fire
-  // i = -1 (front): 10Â° forward, i = 0 (middle): straight, i = 1 (back): 10Â° backward
-  for (let i = -1; i <= 1; i++) {
-    const cannon = new THREE.Mesh(sideCannonGeom, sideCannonMat)
-    cannon.position.set(-1.6, 1.8, i * 2)
-    cannon.rotation.z = Math.PI / 2
-    // Angle cannons: front one forward, back one backward
-    cannon.rotation.y = i * (10 * Math.PI / 180) // 10 degrees cone
-    playerShip.add(cannon)
-  }
-
-  // Starboard side cannons - 3 cannons angled for cone fire
-  for (let i = -1; i <= 1; i++) {
-    const cannon = new THREE.Mesh(sideCannonGeom, sideCannonMat)
-    cannon.position.set(1.6, 1.8, i * 2)
-    cannon.rotation.z = Math.PI / 2
-    // Angle cannons: front one forward, back one backward
-    cannon.rotation.y = i * (10 * Math.PI / 180) // 10 degrees cone
-    playerShip.add(cannon)
-  }
-
-  playerShip.position.set(0, 0, 0)
+function createPlayerShipLocal() {
+  playerShip = buildPlayerShip()
   scene.add(playerShip)
 }
 
@@ -929,226 +573,12 @@ function spawnEnemyShip() {
   showMessage('3 enemy ships approaching!', 3000)
 }
 
-function createEnemyShipMesh(shipType) {
-  const mesh = new THREE.Group()
-  const size = shipType.size
-  const woodMat = new THREE.MeshPhongMaterial({ color: 0x654321 })
-  const sailMat = new THREE.MeshPhongMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
 
-  // === IMPROVED HULL (tapered shape) ===
-  const hullShape = new THREE.Shape()
-  hullShape.moveTo(-1.5 * size, -4 * size)
-  hullShape.lineTo(1.5 * size, -4 * size)
-  hullShape.lineTo(1.8 * size, 0)
-  hullShape.lineTo(1.5 * size, 4 * size)
-  hullShape.lineTo(-1.5 * size, 4 * size)
-  hullShape.lineTo(-1.8 * size, 0)
-  hullShape.closePath()
-
-  const extrudeSettings = { depth: 2 * size, bevelEnabled: true, bevelThickness: 0.2 * size, bevelSize: 0.1 * size, bevelSegments: 2 }
-  const hullGeom = new THREE.ExtrudeGeometry(hullShape, extrudeSettings)
-  const hullMat = new THREE.MeshPhongMaterial({ color: shipType.color })
-  const hull = new THREE.Mesh(hullGeom, hullMat)
-  hull.rotation.x = -Math.PI / 2
-  hull.position.y = 0.5 * size
-  mesh.add(hull)
-
-  // Hull stripe
-  const stripeGeom = new THREE.BoxGeometry(3.2 * size, 0.15 * size, 8.5 * size)
-  const stripeMat = new THREE.MeshPhongMaterial({ color: 0x8B0000 })
-  const stripe = new THREE.Mesh(stripeGeom, stripeMat)
-  stripe.position.y = 1.3 * size
-  mesh.add(stripe)
-
-  // Deck
-  const deckGeom = new THREE.BoxGeometry(2.8 * size, 0.25 * size, 7.5 * size)
-  const deckMat = new THREE.MeshPhongMaterial({ color: 0xDEB887 })
-  const deck = new THREE.Mesh(deckGeom, deckMat)
-  deck.position.y = 2.1 * size
-  mesh.add(deck)
-
-  // Railings
-  const railMat = new THREE.MeshPhongMaterial({ color: 0x3D2817 })
-  for (let i = 0; i < 6; i++) {
-    const railPost = new THREE.Mesh(new THREE.CylinderGeometry(0.05 * size, 0.05 * size, 1 * size), railMat)
-    railPost.position.set(-1.3 * size, 2.7 * size, -3 + i * 1.2 * size)
-    mesh.add(railPost)
-    const railPost2 = new THREE.Mesh(new THREE.CylinderGeometry(0.05 * size, 0.05 * size, 1 * size), railMat)
-    railPost2.position.set(1.3 * size, 2.7 * size, -3 + i * 1.2 * size)
-    mesh.add(railPost2)
-  }
-
-  // === MASTS ===
-  // Main mast
-  const mainMast = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.25 * size, 0.3 * size, 12 * size, 8),
-    woodMat
-  )
-  mainMast.position.set(0, 7.5 * size, 0)
-  mesh.add(mainMast)
-
-  // Main yard (horizontal spar)
-  const yard1 = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.06 * size, 0.06 * size, 7 * size, 8),
-    woodMat
-  )
-  yard1.rotation.z = Math.PI / 2
-  yard1.position.set(0, 12 * size, 0)
-  mesh.add(yard1)
-
-  // Main sail - attached to yard, faces sideways
-  const mainSail = new THREE.Mesh(
-    new THREE.PlaneGeometry(6 * size, 6 * size),
-    sailMat
-  )
-  mainSail.position.set(0, 10 * size, 0)
-  mainSail.rotation.y = Math.PI / 2
-  mesh.add(mainSail)
-
-  // Lower yard and sail
-  const yard2 = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.05 * size, 0.05 * size, 5 * size, 8),
-    woodMat
-  )
-  yard2.rotation.z = Math.PI / 2
-  yard2.position.set(0, 7 * size, 0)
-  mesh.add(yard2)
-
-  const lowerSail = new THREE.Mesh(
-    new THREE.PlaneGeometry(4 * size, 4 * size),
-    sailMat
-  )
-  lowerSail.position.set(0, 5.5 * size, 0)
-  lowerSail.rotation.y = Math.PI / 2
-  mesh.add(lowerSail)
-
-  // Fore mast
-  const foreMast = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.18 * size, 0.22 * size, 8 * size, 8),
-    woodMat
-  )
-  foreMast.position.set(0, 5 * size, -3 * size)
-  mesh.add(foreMast)
-
-  // Fore yard
-  const foreYard = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.05 * size, 0.05 * size, 4 * size, 8),
-    woodMat
-  )
-  foreYard.rotation.z = Math.PI / 2
-  foreYard.position.set(0, 7.5 * size, -3 * size)
-  mesh.add(foreYard)
-
-  // Fore sail
-  const foreSail = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.5 * size, 3.5 * size),
-    sailMat
-  )
-  foreSail.position.set(0, 6 * size, -3 * size)
-  foreSail.rotation.y = Math.PI / 2
-  mesh.add(foreSail)
-
-  // Flag
-  const flagMat = new THREE.MeshBasicMaterial({
-    color: shipType === SHIP_TYPES.RAMMER ? 0xff0000 : (shipType === SHIP_TYPES.BIG ? 0xffff00 : 0x0000ff)
-  })
-  const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.5 * size, 1 * size), flagMat)
-  flag.position.set(0, 13 * size, 0)
-  flag.rotation.y = Math.PI / 2
-  mesh.add(flag)
-
-  // Rammer spike
-  if (shipType === SHIP_TYPES.RAMMER) {
-    const spike = new THREE.Mesh(
-      new THREE.ConeGeometry(0.35 * size, 4 * size, 6),
-      new THREE.MeshPhongMaterial({ color: 0x888888, shininess: 80 })
-    )
-    spike.rotation.x = -Math.PI / 2
-    spike.position.set(0, 1 * size, 5 * size)
-    mesh.add(spike)
-  }
-
-  // No animated sails for enemies
-  mesh.userData.sails = []
-
-  return mesh
-}
-
-function createKraken() {
+function createKrakenLocal() {
   if (krakenMesh) scene.remove(krakenMesh)
-
-  krakenMesh = new THREE.Group()
-
-  // Bigger, more impressive body
-  const bodyGeometry = new THREE.SphereGeometry(12, 20, 20)
-  const bodyMaterial = new THREE.MeshPhongMaterial({ color: 0x1a3030 })
-  const body = new THREE.Mesh(bodyGeometry, bodyMaterial)
-  body.scale.y = 0.6
-  body.position.y = 3
-  krakenMesh.add(body)
-
-  // Glowing eyes
-  const eyeGeometry = new THREE.SphereGeometry(2, 12, 12)
-  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xff3333 })
-  const eyeL = new THREE.Mesh(eyeGeometry, eyeMaterial)
-  eyeL.position.set(-4, 5, 8)
-  krakenMesh.add(eyeL)
-  const eyeR = new THREE.Mesh(eyeGeometry, eyeMaterial)
-  eyeR.position.set(4, 5, 8)
-  krakenMesh.add(eyeR)
-
-  // Animated tentacles - attached to body center
-  kraken.value.tentacles = []
-  for (let i = 0; i < 8; i++) {
-    // Create a group for each tentacle to pivot from body center
-    const tentGroup = new THREE.Group()
-    const angle = (i / 8) * Math.PI * 2
-    tentGroup.rotation.y = angle
-
-    // Tentacle mesh - positioned extending outward from center
-    const tentGeom = new THREE.CylinderGeometry(0.4, 1.5, 35, 8)
-    const tentMat = new THREE.MeshPhongMaterial({ color: 0x1a3030 })
-    const tent = new THREE.Mesh(tentGeom, tentMat)
-    tent.position.set(17, 0, 0) // Half of 35 = extends outward from center
-    tent.rotation.z = Math.PI / 2 // Lay horizontal
-
-    tentGroup.add(tent)
-    krakenMesh.add(tentGroup)
-
-    // Store tentacle data
-    tent.userData.angle = angle
-    tent.userData.baseAngle = angle
-    tent.userData.phase = Math.random() * Math.PI * 2
-    tent.userData.speed = 0.8 + Math.random() * 0.4
-    tent.userData.state = 'idle'
-    tent.userData.targetAngle = 0
-    tent.userData.smashCooldown = 0
-    tent.userData.smashDuration = 0
-    tent.userData.hitChance = 0
-    tent.userData.group = tentGroup // Reference to group for rotation
-
-    kraken.value.tentacles.push(tent)
-  }
-
-  // Whirlpool effect (particle ring around kraken)
-  const whirlpoolGeom = new THREE.RingGeometry(15, 25, 32)
-  const whirlpoolMat = new THREE.MeshBasicMaterial({
-    color: 0x4488ff,
-    transparent: true,
-    opacity: 0.3,
-    side: THREE.DoubleSide
-  })
-  const whirlpool = new THREE.Mesh(whirlpoolGeom, whirlpoolMat)
-  whirlpool.rotation.x = -Math.PI / 2
-  whirlpool.position.y = 0.5
-  krakenMesh.add(whirlpool)
-  krakenMesh.userData.whirlpool = whirlpool
-
-  krakenMesh.position.set(0, 0, 0)
-  scene.add(krakenMesh)
+  krakenMesh = buildKraken(scene, kraken.value)
   krakenActive = true
   kraken.value.hp = 200
-
   showMessage('The Kraken awakens!', 5000)
 }
 
@@ -1303,7 +733,7 @@ function checkProceduralSpawns() {
         scene.remove(krakenMesh)
         krakenMesh = null
       }
-      createKraken()
+      createKrakenLocal()
       showMessage('A new Kraken approaches...', 3000)
     }
   }
@@ -1325,7 +755,7 @@ function spawnChunk(cx, cz) {
       const dist = 20 + Math.random() * maxDist
       const ix = worldX + Math.cos(angle) * dist
       const iz = worldZ + Math.sin(angle) * dist
-      spawnIsland(ix, iz)
+      worldObjects.islands.push(buildIsland(scene, ix, iz))
     }
   }
 
@@ -1337,7 +767,7 @@ function spawnChunk(cx, cz) {
     const dist = 15 + Math.random() * maxDist
     const rx = worldX + Math.cos(angle) * dist
     const rz = worldZ + Math.sin(angle) * dist
-    spawnRock(rx, rz)
+    worldObjects.rocks.push(buildRock(scene, rx, rz))
   }
 
   // Ship tracking for this chunk (used by both live ships and sunken ships)
@@ -1472,128 +902,16 @@ function spawnChunk(cx, cz) {
     } while (!validPos && attempts < 10)
 
     if (validPos) {
-      spawnSunkenShip(sx, sz)
+      const wreck = buildSunkenShip(scene, sx, sz)
+      worldObjects.ships = worldObjects.ships || []
+      worldObjects.ships.push(wreck)
+      spawnTreasure(sx, sz, 75, false)
     }
   }
 }
 
-function spawnIsland(x, z) {
-  const islandGroup = new THREE.Group()
 
-  // Random island size - bigger islands now
-  const islandSize = 20 + Math.random() * 25 // 20-45 radius
-  const islandHeight = 6 + islandSize * 0.3
 
-  // Sand base - larger cone
-  const sandGeom = new THREE.ConeGeometry(islandSize, islandHeight, 8)
-  const sandMat = new THREE.MeshPhongMaterial({ color: 0xF4A460 })
-  const sand = new THREE.Mesh(sandGeom, sandMat)
-  sand.position.y = islandHeight / 2
-  islandGroup.add(sand)
-
-  // Multiple palm trees for bigger islands
-  const numTrees = Math.floor(1 + islandSize / 20)
-  for (let t = 0; t < numTrees; t++) {
-    const treeX = (Math.random() - 0.5) * islandSize * 0.6
-    const treeZ = (Math.random() - 0.5) * islandSize * 0.6
-
-    const trunkGeom = new THREE.CylinderGeometry(0.3, 0.4, 5 + islandSize * 0.1)
-    const trunkMat = new THREE.MeshPhongMaterial({ color: 0x8B4513 })
-    const trunk = new THREE.Mesh(trunkGeom, trunkMat)
-    trunk.position.set(treeX, islandHeight / 2 + 2 + islandSize * 0.05, treeZ)
-    islandGroup.add(trunk)
-
-    const leavesGeom = new THREE.ConeGeometry(3 + islandSize * 0.1, 4 + islandSize * 0.05, 8)
-    const leavesMat = new THREE.MeshPhongMaterial({ color: 0x228B22 })
-    const leaves = new THREE.Mesh(leavesGeom, leavesMat)
-    leaves.position.set(treeX, islandHeight / 2 + 4 + islandSize * 0.1, treeZ)
-    islandGroup.add(leaves)
-  }
-
-  // 30% chance of harbor (bigger dock for bigger islands)
-  if (Math.random() < 0.3) {
-    const dockLength = 12 + islandSize * 0.4
-    const dockGeom = new THREE.BoxGeometry(dockLength, 0.3, 4)
-    const dockMat = new THREE.MeshPhongMaterial({ color: 0x8B4513 })
-    const dock = new THREE.Mesh(dockGeom, dockMat)
-    // Dock extends outward from island edge (no rotation - straight line)
-    dock.position.set(islandSize + dockLength / 2, 0.2, 0)
-    dock.rotation.y = 0 // Pointing outward from island center
-    islandGroup.add(dock)
-
-    // Dock posts (along the dock)
-    for (let p = 0; p < 3; p++) {
-      const postGeom = new THREE.CylinderGeometry(0.2, 0.2, 1.5)
-      const post = new THREE.Mesh(postGeom, dockMat)
-      post.position.set(islandSize + 3 + p * 4, 0.9, 0)
-      islandGroup.add(post)
-    }
-
-    // Red circle at dock end (like treasure - player anchors here)
-    const dockEndX = islandSize + dockLength
-    const dockEndRingGeom = new THREE.RingGeometry(6, 8, 32)
-    const dockEndRingMat = new THREE.MeshBasicMaterial({
-      color: 0xff0000,
-      transparent: true,
-      opacity: 0.5,
-      side: THREE.DoubleSide
-    })
-    const dockEndRing = new THREE.Mesh(dockEndRingGeom, dockEndRingMat)
-    dockEndRing.rotation.x = -Math.PI / 2
-    dockEndRing.position.set(dockEndX, 0.2, 0)
-    islandGroup.add(dockEndRing)
-
-    // Store dock end position for gameplay
-    islandGroup.userData.dockEndX = dockEndX
-    islandGroup.userData.hasHarbor = true
-  }
-
-  islandGroup.position.set(x, 0, z)
-  scene.add(islandGroup)
-  worldObjects.islands.push({ x, z, radius: islandSize, mesh: islandGroup })
-}
-
-function spawnSunkenShip(x, z) {
-  // Half-sunk shipwreck - brownish hull tilted
-  const shipwreckGroup = new THREE.Group()
-
-  // Hull (tilted as if sunk)
-  const hullGeom = new THREE.BoxGeometry(3, 1.5, 8)
-  const hullMat = new THREE.MeshPhongMaterial({ color: 0x4a3728 }) // Dark brown
-  const hull = new THREE.Mesh(hullGeom, hullMat)
-  hull.position.y = -0.3
-  hull.rotation.x = 0.3 // Tilt back
-  hull.rotation.z = (Math.random() - 0.5) * 0.2
-  shipwreckGroup.add(hull)
-
-  // Mast sticking out
-  const mastGeom = new THREE.CylinderGeometry(0.15, 0.2, 6)
-  const mastMat = new THREE.MeshPhongMaterial({ color: 0x3d2817 })
-  const mast = new THREE.Mesh(mastGeom, mastMat)
-  mast.position.set(0, 2, 1)
-  mast.rotation.x = -0.4
-  shipwreckGroup.add(mast)
-
-  shipwreckGroup.position.set(x, 0, z)
-  scene.add(shipwreckGroup)
-
-  // Spawn treasure at the wreck location (no message for sunken ships)
-  spawnTreasure(x, z, 75, false)
-
-  // Track for cleanup
-  worldObjects.ships = worldObjects.ships || []
-  worldObjects.ships.push({ x, z, radius: 5, mesh: shipwreckGroup })
-}
-
-function spawnRock(x, z) {
-  const rockGeom = new THREE.DodecahedronGeometry(2 + Math.random() * 3)
-  const rockMat = new THREE.MeshPhongMaterial({ color: 0x696969 })
-  const rock = new THREE.Mesh(rockGeom, rockMat)
-  rock.position.set(x, 0.5, z)
-  rock.rotation.set(Math.random(), Math.random(), Math.random())
-  scene.add(rock)
-  worldObjects.rocks.push({ x, z, radius: 3, mesh: rock })
-}
 
 function spawnRandomShip(x, z) {
   const types = ['RAMMER', 'NORMAL', 'BIG']
@@ -2178,7 +1496,6 @@ function createAnchor() {
 }
 
 // === HARBOUR SYSTEM ===
-const HARBOUR_RANGE = 15 // Distance to trigger harbour shop
 
 function checkHarbourEntry() {
   if (!anchorDropped) return
@@ -2351,22 +1668,6 @@ function animateSails(dt) {
 
 
 
-// Chunk size
-const CHUNK_SIZE = 200 // Each chunk is 200x200 units
-
-// Performance: Distance tiers (see PERFORMANCE.md)
-const ICON_RENDER_DIST = 200
-const INACTIVE_DIST = 300
-const ACTIVE_DIST = 400
-const KRAKEN_INACTIVE_DIST = 300
-const KRAKEN_RENDER_DIST = 300
-const CANNONBALL_CULL_DIST = 300
-
-// Enemy AI state machine distances
-const ENEMY_IDLE_DIST = 200 // Beyond this = idle (don't chase)
-const ENEMY_ALERT_DIST = 120 // Beyond this = alert (start approaching)
-const ENEMY_ATTACK_DIST = 100 // Within this = attacking (full chase)
-
 // Check if a position would collide with obstacles
 function checkIslandCollision(x, z, radius) {
   // Check only islands (for obstacle avoidance)
@@ -2462,57 +1763,6 @@ function hasLineOfSight(x1, z1, x2, z2) {
   return true
 }
 
-// Fire effect for damaged ships
-function createFire(x, z, isEnemy = false) {
-  const fireGroup = new THREE.Group()
-
-  // Create multiple flame particles
-  const flames = []
-  for (let i = 0; i < 5; i++) {
-    const flameGeom = new THREE.SphereGeometry(0.3 + Math.random() * 0.2, 6, 6)
-    const flameMat = new THREE.MeshBasicMaterial({
-      color: Math.random() > 0.5 ? 0xff6600 : 0xff3300,
-      transparent: true,
-      opacity: 0.8
-    })
-    const flame = new THREE.Mesh(flameGeom, flameMat)
-    flame.position.set(
-      (Math.random() - 0.5) * 1.5,
-      1.5 + Math.random() * 0.5,
-      (Math.random() - 0.5) * 1.5
-    )
-    flame.userData.baseY = flame.position.y
-    flame.userData.phase = Math.random() * Math.PI * 2
-    flames.push(flame)
-    fireGroup.add(flame)
-  }
-
-  // Add smoke (grey spheres above flames)
-  for (let i = 0; i < 3; i++) {
-    const smokeGeom = new THREE.SphereGeometry(0.4 + Math.random() * 0.3, 5, 5)
-    const smokeMat = new THREE.MeshBasicMaterial({
-      color: 0x444444,
-      transparent: true,
-      opacity: 0.4
-    })
-    const smoke = new THREE.Mesh(smokeGeom, smokeMat)
-    smoke.position.set(
-      (Math.random() - 0.5) * 1,
-      2.5 + Math.random() * 0.5,
-      (Math.random() - 0.5) * 1
-    )
-    smoke.userData.baseY = smoke.position.y
-    smoke.userData.phase = Math.random() * Math.PI * 2
-    flames.push(smoke)
-    fireGroup.add(smoke)
-  }
-
-  fireGroup.position.set(x, 0, z)
-  scene.add(fireGroup)
-
-  return { mesh: fireGroup, flames }
-}
-
 function updateFireEffects(dt) {
   const time = Date.now() * 0.001
 
@@ -2536,7 +1786,7 @@ function updateFireEffects(dt) {
     }
   } else if (hp.value < 50) {
     // Create fire when damaged
-    playerFire.value = createFire(playerPos.value.x, playerPos.value.z)
+    playerFire.value = buildFire(scene, playerPos.value.x, playerPos.value.z)
   }
 
   // Enemy fires
@@ -2569,7 +1819,7 @@ function updateFireEffects(dt) {
       if (!hasFire) {
         enemyFires.value.push({
           enemy,
-          ...createFire(enemy.x, enemy.z, true)
+          ...buildFire(scene, enemy.x, enemy.z)
         })
       }
     }
@@ -2580,8 +1830,14 @@ function update(dt) {
   // Gradual per-frame disposal - prevents lag spikes from bulk cleanup
   processDisposalQueue()
 
-  // Also run cleanup checks (no disposal, just culling references)
-  // Chunk cleanup is handled by the range check below
+  // GPU ocean animation — runs every frame regardless of game state so waves
+  // are always visible.  Uses a local accumulator instead of Date.now() to
+  // stay within float32 precision on the GPU.
+  oceanTime += dt
+  if (oceanMesh) {
+    updateOcean(oceanMesh, oceanTime, playerPos.value.x, playerPos.value.z, windAngle, windSpeed.value)
+  }
+  if (sprayPool) updateSpray(sprayPool, dt)
 
   if (shopOpen.value) {
     // Pause physics when in harbour shop
@@ -2707,15 +1963,40 @@ function update(dt) {
     lastCleanupTime = Date.now()
   }
 
-  // Update ship mesh
-  playerShip.position.x = playerPos.value.x
-  playerShip.position.z = playerPos.value.z
+  // Update ship mesh — sample wave heights to bob on the surface
+  const px = playerPos.value.x
+  const pz = playerPos.value.z
+  playerShip.position.x = px
+  playerShip.position.z = pz
+
+  const hCenter = getOceanHeight(px, pz, oceanTime, windAngle, windSpeed.value)
+  const bowOff = 6, sideOff = 3
+  const hBow   = getOceanHeight(px + Math.sin(playerAngle) * bowOff,  pz - Math.cos(playerAngle) * bowOff, oceanTime, windAngle, windSpeed.value)
+  const hStern = getOceanHeight(px - Math.sin(playerAngle) * bowOff,  pz + Math.cos(playerAngle) * bowOff, oceanTime, windAngle, windSpeed.value)
+  const hPort  = getOceanHeight(px - Math.cos(playerAngle) * sideOff, pz - Math.sin(playerAngle) * sideOff, oceanTime, windAngle, windSpeed.value)
+  const hStbd  = getOceanHeight(px + Math.cos(playerAngle) * sideOff, pz + Math.sin(playerAngle) * sideOff, oceanTime, windAngle, windSpeed.value)
+
+  const speedDampen = 1.0 / (1.0 + playerSpeed.value * 0.025)
+  playerShip.position.y = hCenter * speedDampen
+
+  const pitch = Math.atan2((hBow - hStern) * speedDampen, bowOff * 2) * 2.2
+  const roll  = Math.atan2((hPort - hStbd) * speedDampen, sideOff * 2) * 2.0
+  playerShip.rotation.x = pitch
+  playerShip.rotation.z = roll
+  playerShip.rotation.y = playerAngle
+
+  // Emit bow spray when moving fast
+  if (sprayPool && playerSpeed.value > 4) {
+    const sprayChance = (playerSpeed.value - 4) * 0.04
+    if (Math.random() < sprayChance) {
+      emitSpray(sprayPool, px, pz, playerAngle, playerSpeed.value, 1 + Math.floor(playerSpeed.value / 6))
+    }
+  }
 
   // Update anchor visibility
   if (anchorMesh) {
     anchorMesh.visible = anchorDropped || anchorAnimating
   }
-  playerShip.rotation.y = playerAngle
 
   // Camera follow - interpolate between behind view and top-down based on cameraMode
   // Behind view (navigation): close behind, lower angle
@@ -2787,15 +2068,16 @@ function update(dt) {
     if (!aiThrottle) {
       mesh.position.x = enemy.x
       mesh.position.z = enemy.z
+      mesh.position.y = getOceanHeight(enemy.x, enemy.z, oceanTime, windAngle, windSpeed.value)
       mesh.rotation.y = enemy.angle
       return
     }
     // Performance: Skip AI for distant enemies
     if (distToPlayer > ACTIVE_DIST) {
-      // Just render stationary placeholder - no AI, no physics
-      mesh.visible = distToPlayer <= ACTIVE_DIST + 100 // Fade out
+      mesh.visible = distToPlayer <= ACTIVE_DIST + 100
       mesh.position.x = enemy.x
       mesh.position.z = enemy.z
+      mesh.position.y = getOceanHeight(enemy.x, enemy.z, oceanTime, windAngle, windSpeed.value)
       mesh.rotation.y = enemy.angle
       return
     }
@@ -2907,7 +2189,7 @@ function update(dt) {
 
     // Enemy wake
     if (enemySpeed > 2 && Math.random() < 0.1) {
-      spawnWakeParticle(enemy.x, enemy.z, enemy.angle, true)
+      emitWake(scene, playerWake, enemy.x, enemy.z, enemy.angle, true)
     }
 
     // Check if enemy hit a rock (takes damage but keeps going sometimes)
@@ -2926,9 +2208,19 @@ function update(dt) {
 
     // Infinite world - no boundaries
 
-    // Update mesh
+    // Update mesh — bob on waves
     mesh.position.x = enemy.x
     mesh.position.z = enemy.z
+    const eH = getOceanHeight(enemy.x, enemy.z, oceanTime, windAngle, windSpeed.value)
+    mesh.position.y = eH
+    const eFwd = 4 * (shipType.size || 1)
+    const eSide = 2 * (shipType.size || 1)
+    const eHBow  = getOceanHeight(enemy.x + Math.sin(enemy.angle) * eFwd, enemy.z - Math.cos(enemy.angle) * eFwd, oceanTime, windAngle, windSpeed.value)
+    const eHStern = getOceanHeight(enemy.x - Math.sin(enemy.angle) * eFwd, enemy.z + Math.cos(enemy.angle) * eFwd, oceanTime, windAngle, windSpeed.value)
+    const eHPort  = getOceanHeight(enemy.x - Math.cos(enemy.angle) * eSide, enemy.z - Math.sin(enemy.angle) * eSide, oceanTime, windAngle, windSpeed.value)
+    const eHStbd  = getOceanHeight(enemy.x + Math.cos(enemy.angle) * eSide, enemy.z + Math.sin(enemy.angle) * eSide, oceanTime, windAngle, windSpeed.value)
+    mesh.rotation.x = Math.atan2(eHBow - eHStern, eFwd * 2) * 1.8
+    mesh.rotation.z = Math.atan2(eHPort - eHStbd, eSide * 2) * 1.6
     mesh.rotation.y = enemy.angle
 
     // Animate enemy sails
@@ -3102,7 +2394,7 @@ function update(dt) {
     // [KRAKEN DISABLED]
     // setTimeout(() => {
     //   if (gameState.value === 'playing') {
-    //     createKraken()
+    //     createKrakenLocal()
     //   }
     // }, 3000)
   }
@@ -3315,19 +2607,14 @@ function update(dt) {
     // Spawn rate based on speed
     const spawnChance = playerSpeed.value / 20
     if (Math.random() < spawnChance) {
-      spawnWakeParticle(playerPos.value.x, playerPos.value.z, playerAngle, false)
+      emitWake(scene, playerWake, playerPos.value.x, playerPos.value.z, playerAngle, false)
     }
   }
-  updateWakeParticles(dt)
+  tickWake(scene, playerWake, dt)
 
   // Update GPU wind particles every frame via uniforms only.
   updateWindParticles(dt)
-  
-  // Update GPU ocean shader time uniform
-  if (oceanMesh) {
-    oceanMesh.material.uniforms.uTime.value = Date.now() * 0.001
-  }
-  
+
   // Debug wind indicators â€” update direction every frame
   if (debugWindArrow) {
     debugWindArrow.rotation.y = windAngle
@@ -3399,56 +2686,6 @@ function updateEnemyIndicators() {
   }
 
   enemyIndicators.value = indicators
-}
-
-// Wake particle functions
-function spawnWakeParticle(x, z, angle, isEnemy) {
-  const wakeGeom = new THREE.SphereGeometry(0.15, 4, 4)
-  const wakeMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.4
-  })
-  const wake = new THREE.Mesh(wakeGeom, wakeMat)
-
-  // Position behind the ship
-  const offset = isEnemy ? 5 : 5
-  const sideOffset = (Math.random() - 0.5) * 2 // Random side
-  wake.position.set(
-    x - Math.sin(angle) * offset + Math.cos(angle) * sideOffset,
-    0.3,
-    z - Math.cos(angle) * offset - Math.sin(angle) * sideOffset
-  )
-
-  scene.add(wake)
-  playerWake.push({
-    mesh: wake,
-    life: 2 + Math.random() // 2-3 seconds
-  })
-
-  // Limit particles
-  while (playerWake.length > MAX_WAKE_PARTICLES) {
-    const old = playerWake.shift()
-    if (old && old.mesh) disposeMesh(old.mesh)
-  }
-}
-
-function updateWakeParticles(dt) {
-  for (let i = playerWake.length - 1; i >= 0; i--) {
-    const p = playerWake[i]
-    p.life -= dt
-
-    // Expand and fade
-    const scale = 1 + (2 - p.life) * 0.5
-    p.mesh.scale.setScalar(scale)
-    p.mesh.material.opacity = (p.life / 3) * 0.5
-    p.mesh.position.y = 0.3 + Math.sin(Date.now() * 0.005 + i) * 0.2
-
-    if (p.life <= 0) {
-      disposeMesh(p.mesh)
-      playerWake.splice(i, 1)
-    }
-  }
 }
 
 function animate() {
@@ -3551,7 +2788,7 @@ function startGame() {
   // [KRAKEN DISABLED]
   // krakenActive = true
   // kraken.value = { x: startX, z: startZ, hp: 200, angle: 0, tentacles: [] }
-  // createKraken()
+  // createKrakenLocal()
 
   // Clear cannonballs - dispose properly
   cannonballs.forEach(b => { if (b && b.mesh) disposeMesh(b.mesh) })

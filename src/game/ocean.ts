@@ -12,10 +12,10 @@ const SWELL_C_X =  0.500,  SWELL_C_Z = -0.866
 // ─── Wave table shared between GPU and CPU ───
 // [dirX, dirZ, frequency, speed, amplitude, steepness(Q)]
 const WAVES = [
-  [SWELL_A_X, SWELL_A_Z, 0.014, 0.55, 2.40, 0.42],   // primary swell — tall, long, sweeping
-  [SWELL_B_X, SWELL_B_Z, 0.032, 0.90, 0.70, 0.35],   // secondary cross-swell
-  [SWELL_C_X, SWELL_C_Z, 0.085, 1.50, 0.18, 0.20],   // medium chop
-  [SWELL_A_X + 0.2, SWELL_A_Z - 0.1, 0.16, 2.10, 0.06, 0.10], // fine detail
+  [SWELL_A_X, SWELL_A_Z, 0.012, 0.55, 3.50, 0.8],   // Massive primary swell
+  [SWELL_B_X, SWELL_B_Z, 0.025, 0.80, 1.20, 0.7],   // Large cross swell
+  [SWELL_C_X, SWELL_C_Z, 0.08, 1.30, 0.40, 0.6],    // Pronounced chop
+  [SWELL_A_X + 0.2, SWELL_A_Z - 0.1, 0.20, 2.00, 0.10, 0.4], // detail
 ] as const
 
 const RIPPLE_FREQ  = 0.35
@@ -70,14 +70,14 @@ const vertexShader = `
     vec3 tX   = vec3(1.0, 0.0, 0.0);
     vec3 tY   = vec3(0.0, 1.0, 0.0);
 
-    gerstner(wc, swA, ${WAVES[0][2]}, ${WAVES[0][3]}, ${WAVES[0][4]}, ${WAVES[0][5]}, disp, tX, tY);
-    gerstner(wc, swB, ${WAVES[1][2]}, ${WAVES[1][3]}, ${WAVES[1][4]}, ${WAVES[1][5]}, disp, tX, tY);
-    gerstner(wc, swC, ${WAVES[2][2]}, ${WAVES[2][3]}, ${WAVES[2][4]}, ${WAVES[2][5]}, disp, tX, tY);
-    gerstner(wc, swD, ${WAVES[3][2]}, ${WAVES[3][3]}, ${WAVES[3][4]}, ${WAVES[3][5]}, disp, tX, tY);
+    gerstner(wc, swA, ${WAVES[0][2].toFixed(4)}, ${WAVES[0][3].toFixed(4)}, ${WAVES[0][4].toFixed(4)}, ${WAVES[0][5].toFixed(4)}, disp, tX, tY);
+    gerstner(wc, swB, ${WAVES[1][2].toFixed(4)}, ${WAVES[1][3].toFixed(4)}, ${WAVES[1][4].toFixed(4)}, ${WAVES[1][5].toFixed(4)}, disp, tX, tY);
+    gerstner(wc, swC, ${WAVES[2][2].toFixed(4)}, ${WAVES[2][3].toFixed(4)}, ${WAVES[2][4].toFixed(4)}, ${WAVES[2][5].toFixed(4)}, disp, tX, tY);
+    gerstner(wc, swD, ${WAVES[3][2].toFixed(4)}, ${WAVES[3][3].toFixed(4)}, ${WAVES[3][4].toFixed(4)}, ${WAVES[3][5].toFixed(4)}, disp, tX, tY);
 
     vec2 w = normalize(uWindDir);
-    float rAmp = ${RIPPLE_AMP} + uWindStrength * 0.003;
-    gerstner(wc, w, ${RIPPLE_FREQ}, ${RIPPLE_SPEED}, rAmp, ${RIPPLE_Q}, disp, tX, tY);
+    float rAmp = ${RIPPLE_AMP.toFixed(4)} + uWindStrength * 0.003;
+    gerstner(wc, w, ${RIPPLE_FREQ.toFixed(4)}, ${RIPPLE_SPEED.toFixed(4)}, rAmp, ${RIPPLE_Q.toFixed(4)}, disp, tX, tY);
 
     vec3 pos = position;
     pos.xy += disp.xz;
@@ -140,39 +140,40 @@ const fragmentShader = `
     float NdotV = max(dot(N, V), 0.0);
     float NdotL = max(dot(N, sunDir), 0.0);
 
-    // ── Base water colour: deep navy underneath, brighter teal above ──
-    vec3 abyssCol    = vec3(0.001, 0.012, 0.045);
-    vec3 deepCol     = vec3(0.005, 0.035, 0.10);
-    vec3 midCol      = vec3(0.012, 0.10,  0.20);
-    vec3 surfaceCol  = vec3(0.025, 0.18,  0.30);
-    vec3 crestCol    = vec3(0.05,  0.26,  0.34);
+    // ── Base water colour: Vivid blue / turquoise tint ──
+    vec3 abyssCol    = vec3(0.00, 0.20, 0.55); // Deep rich blue
+    vec3 deepCol     = vec3(0.00, 0.45, 0.75); // Vivid blue
+    vec3 midCol      = vec3(0.00, 0.65, 0.88); // Light bright blue
+    vec3 surfaceCol  = vec3(0.15, 0.85, 0.90); // Turquoise
+    vec3 crestCol    = vec3(0.40, 0.95, 0.95); // Bright Aqua at the very top
 
-    float elev = clamp((vElevation + 2.5) / 5.0, 0.0, 1.0);
-    vec3 col = mix(abyssCol, deepCol,    smoothstep(0.0,  0.15, elev));
-    col = mix(col, midCol,               smoothstep(0.15, 0.35, elev));
-    col = mix(col, surfaceCol,           smoothstep(0.35, 0.65, elev));
-    col = mix(col, crestCol,             smoothstep(0.65, 1.0,  elev));
+    // Adjust scale since amplitude is much higher now (up to ~5.0 total)
+    float elev = clamp((vElevation + 3.0) / 6.0, 0.0, 1.0);
+    vec3 col = mix(abyssCol, deepCol,    smoothstep(0.0,  0.25, elev));
+    col = mix(col, midCol,               smoothstep(0.25, 0.50, elev));
+    col = mix(col, surfaceCol,           smoothstep(0.50, 0.75, elev));
+    col = mix(col, crestCol,             smoothstep(0.75, 1.0,  elev));
 
-    // Darken the deep troughs further with depth-dependent absorption
-    col *= mix(0.55, 1.0, elev);
+    // Darken the deep troughs slightly
+    col *= mix(0.70, 1.0, elev);
 
     // ── Diffuse lighting ──
-    col += vec3(0.012, 0.028, 0.038) * NdotL;
+    col += vec3(0.05, 0.1, 0.15) * NdotL;
 
     // ── Subsurface scattering — luminous turquoise through wave crests ──
     vec3 sssDir = normalize(sunDir + N * 0.55);
-    float sss = pow(max(dot(V, -sssDir), 0.0), 3.0)
-              * smoothstep(-0.5, 1.5, vElevation) * 0.55;
-    col += vec3(0.015, 0.25, 0.18) * sss;
+    float sss = pow(max(dot(V, -sssDir), 0.0), 2.0)
+              * smoothstep(-0.5, 1.5, vElevation) * 0.75;
+    col += vec3(0.1, 0.6, 0.5) * sss;
 
     // Thinner areas near crest tops get extra translucency
-    float thinEdge = smoothstep(1.2, 2.4, vElevation) * pow(max(1.0 - NdotV, 0.0), 2.0);
-    col += vec3(0.02, 0.20, 0.15) * thinEdge * 0.4;
+    float thinEdge = smoothstep(0.8, 1.8, vElevation) * pow(max(1.0 - NdotV, 0.0), 2.0);
+    col += vec3(0.15, 0.70, 0.65) * thinEdge * 0.6;
 
     // Back-lit rim on crests
-    float backLit = pow(max(dot(V, -sunDir), 0.0), 6.0)
-                  * smoothstep(0.3, 1.8, vElevation) * 0.35;
-    col += vec3(0.025, 0.16, 0.12) * backLit;
+    float backLit = pow(max(dot(V, -sunDir), 0.0), 4.0)
+                  * smoothstep(0.3, 1.8, vElevation) * 0.5;
+    col += vec3(0.1, 0.5, 0.4) * backLit;
 
     // ── Sun specular — sharp dancing glints ──
     vec3  H       = normalize(sunDir + V);
@@ -210,23 +211,26 @@ const fragmentShader = `
     foam += max(streak1, 0.0) * 0.20 * smoothstep(0.5, 1.8, vElevation);
     foam += max(streak2, 0.0) * 0.10 * smoothstep(0.8, 2.0, vElevation);
 
-    // Breaking-crest whitecap at the very top of the wave
-    float crestWhite = smoothstep(1.6, 2.4, vElevation) * 0.7;
-    float crestNoise = sin(vWorldPos.x * 1.2 + t * 0.8) * sin(vWorldPos.y * 1.5 - t * 0.6);
-    crestWhite *= 0.5 + 0.5 * max(crestNoise, 0.0);
-    foam += crestWhite;
+    // Breaking-crest whitecap at the very top of the wave (Stylized solid white)
+    // Very thin stripped crest
+    float crestWhite = smoothstep(0.92, 0.98, elev);
+    float crestNoise = hash(floor(vWorldPos * 2.5) - floor(t * 3.0)) * 0.5 + hash(floor(vWorldPos * 3.5 + t * 2.0)) * 0.5;
+    // Harder threshold for a painted/stylized solid white look
+    crestWhite *= smoothstep(0.3, 0.6, crestNoise + (elev - 0.85) * 2.0);
+    foam += crestWhite * 2.5; // Boost to ensure it hits pure white
 
     // Speckle foam on steep faces
     float speckle = hash(floor(vWorldPos * 1.5)) * smoothstep(0.12, 0.25, 1.0 - abs(N.y));
-    foam += speckle * 0.15;
+    foam += speckle * 0.25;
 
-    vec3 foamCol = vec3(0.92, 0.96, 0.99);
-    col = mix(col, foamCol, clamp(foam, 0.0, 1.0) * 0.55);
+    // Pure white foam color to pop against the blue
+    vec3 foamCol = vec3(1.0, 1.0, 1.0);
+    col = mix(col, foamCol, clamp(foam, 0.0, 1.0));
 
-    // ── Alpha: translucent in troughs, opaque on surface ──
-    float alpha = mix(0.82, 0.97, elev);
-    alpha = mix(alpha, 1.0, fresnel * 0.5);
-    alpha = mix(alpha, 1.0, clamp(foam * 0.5, 0.0, 1.0));
+    // ── Alpha: More transparent to see the deeper sea floor ──
+    float alpha = mix(0.70, 0.92, elev);
+    alpha = mix(alpha, 1.0, fresnel * 0.8);
+    alpha = mix(alpha, 1.0, clamp(foam * 0.6, 0.0, 1.0));
 
     // ── Tone-map ──
     col = col / (col + 0.55) * 1.2;
@@ -235,14 +239,83 @@ const fragmentShader = `
   }
 `
 
+const sandVertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+
+const sandFragmentShader = `
+  varying vec2 vUv;
+
+  // Simple pseudo-random hash
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+
+  // Basic value noise
+  float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+
+  // FBM (Fractal Brownian Motion) for sand variance
+  float fbm(vec2 p) {
+    float f = 0.0;
+    float w = 0.5;
+    for (int i = 0; i < 4; i++) {
+      f += w * noise(p);
+      p *= 2.0;
+      w *= 0.5;
+    }
+    return f;
+  }
+
+  void main() {
+    // Large scaling for the vast ocean floor
+    vec2 p = vUv * 800.0;
+    
+    // Create sand ripple effect
+    float ripples = sin(p.x * 2.0 + noise(p * 0.2) * 4.0) * 0.5 + 0.5;
+    float sandNoise = fbm(p * 0.5);
+    
+    // Base sand colors
+    vec3 colorA = vec3(0.5, 0.45, 0.35); // Darker wet sand
+    vec3 colorB = vec3(0.7, 0.65, 0.50); // Lighter sand
+    
+    vec3 color = mix(colorA, colorB, sandNoise);
+    
+    // Add darker spots for rocks/variance
+    float spots = smoothstep(0.7, 0.8, fbm(p * 2.0));
+    color = mix(color, vec3(0.2, 0.2, 0.15), spots * 0.6);
+    
+    // Apply ripples
+    color -= ripples * 0.08;
+
+    gl_FragColor = vec4(color, 1.0);
+  }
+`
+
 // ────────────────────────── runtime API ──────────────────────────
 export function createOcean(scene: THREE.Scene): THREE.Mesh {
-  // Deep-water backing plane visible through the alpha transparency
+  // Procedural sandy backing plane visible through the alpha transparency
   const deepGeom = new THREE.PlaneGeometry(OCEAN_SIZE * 2, OCEAN_SIZE * 2)
-  const deepMat  = new THREE.MeshBasicMaterial({ color: 0x010820, side: THREE.FrontSide })
+  const deepMat  = new THREE.ShaderMaterial({
+    vertexShader: sandVertexShader,
+    fragmentShader: sandFragmentShader,
+    side: THREE.FrontSide
+  })
   const deepPlane = new THREE.Mesh(deepGeom, deepMat)
   deepPlane.rotation.x = -Math.PI / 2
-  deepPlane.position.y = -6.0
+  deepPlane.position.y = -18.0
   deepPlane.frustumCulled = false
   deepPlane.renderOrder = -1
   scene.add(deepPlane)
@@ -387,3 +460,4 @@ export function updateSpray(pool: ReturnType<typeof createSprayPool>, dt: number
     }
   }
 }
+

@@ -47,11 +47,13 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number) {
     dock.position.set(islandSize + dockLength / 2, 0.2, 0)
     islandGroup.add(dock)
 
+    const posts = []
     for (let p = 0; p < 3; p++) {
       const postGeom = new THREE.CylinderGeometry(0.2, 0.2, 1.5)
       const post = new THREE.Mesh(postGeom, dockMat)
       post.position.set(islandSize + 3 + p * 4, 0.9, 0)
       islandGroup.add(post)
+      posts.push(post)
     }
 
     const dockEndX = islandSize + dockLength
@@ -66,6 +68,9 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number) {
 
     islandGroup.userData.dockEndX = dockEndX
     islandGroup.userData.hasHarbor = true
+    islandGroup.userData.dock = dock
+    islandGroup.userData.dockPosts = posts
+    islandGroup.userData.dockEndRing = dockEndRing
   }
 
   islandGroup.position.set(x, 0, z)

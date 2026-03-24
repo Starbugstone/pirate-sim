@@ -44,7 +44,8 @@ const initialUi = {
     maxHpBonus: 0,
     repairCount: 0,
     parrot: 0
-  }
+  },
+  waterMode: 'custom'
 }
 export function PiratesGame() {
   const containerRef = useRef(null)
@@ -86,12 +87,14 @@ export function PiratesGame() {
 
 let scene, camera, renderer
 let animationId = null
+// Constants from ocean.js / ship.js
 
 // Game state
 const gameState = ref('start') // start, playing, gameover
 const victory = ref(false)
 const hp = ref(100)
 const gold = ref(0)
+const score = ref(0) // Added score variable
 
 // Fire effects for damaged ships
 const playerFire = ref(null) // { mesh, particles: [] }
@@ -1089,8 +1092,9 @@ function updateTreasure(dt) {
     }
 
     // Update mesh positions (world coordinates)
-    if (t.mesh) t.mesh.position.set(t.x, 1, t.z)
-    if (t.ringMesh) t.ringMesh.position.set(t.x, 0.3, t.z)
+    const oceanH = getOceanHeight(t.x, t.z, oceanTime, windAngle, windSpeed.value)
+    if (t.mesh) t.mesh.position.set(t.x, oceanH + 1, t.z)
+    if (t.ringMesh) t.ringMesh.position.set(t.x, oceanH + 0.3, t.z)
 
     // Update ring pulsing
     if (t.ringMesh) {
@@ -1937,6 +1941,19 @@ function update(dt) {
     updateOcean(oceanMesh, oceanTime, playerPos.value.x, playerPos.value.z, windAngle, windSpeed.value)
   }
   if (sprayPool) updateSpray(sprayPool, dt)
+
+  // Floating Docks and Harbours (Static islands array and procedural islands array)
+  const allIslands = [...islands, ...worldObjects.islands]
+  allIslands.forEach(island => {
+    if (island.mesh && island.mesh.userData.hasHarbor && island.mesh.userData.dock) {
+      const gX = island.x + island.mesh.userData.dockEndX
+      const gZ = island.z
+      const h = getOceanHeight(gX, gZ, oceanTime, windAngle, windSpeed.value)
+      island.mesh.userData.dock.position.y = h + 0.2
+      island.mesh.userData.dockPosts.forEach(post => post.position.y = h + 1.2)
+      island.mesh.userData.dockEndRing.position.y = h + 0.2
+    }
+  })
 
   if (shopOpen.value) {
     // Pause physics when in harbour shop
@@ -2824,6 +2841,14 @@ function animate() {
 }
 
 function startGame() {
+  if (oceanMesh) {
+    scene.remove(oceanMesh)
+    if (oceanMesh.userData && oceanMesh.userData.deepPlane) {
+      scene.remove(oceanMesh.userData.deepPlane)
+    }
+  }
+  oceanMesh = createOcean(scene)
+
   // Exit pointer lock if active
   if (document.pointerLockElement) {
     document.exitPointerLock()
@@ -2838,6 +2863,7 @@ function startGame() {
   // Reset
   hp.value = 100
   gold.value = 0
+  score.value = 0 // Added score reset
 
   // Reset procedural world
   spawnedChunks.clear()
@@ -3053,7 +3079,8 @@ function startGame() {
             <p><strong>Avoid</strong> - Islands, rocks, and the Kraken</p>
             <p><strong>Defeat</strong> - The enemy ship, then face the Kraken</p>
           </div>
-          <button onClick={() => actionsRef.current.startGame()}>Set Sail</button>
+
+          <button onClick={() => actionsRef.current.startGame(ui.waterMode)}>Set Sail</button>
         </div>
       ) : null}
       {ui.gameState === 'gameover' ? (

@@ -1949,8 +1949,6 @@ function update(dt) {
       const gX = island.x + island.mesh.userData.dockEndX
       const gZ = island.z
       const h = getOceanHeight(gX, gZ, oceanTime, windAngle, windSpeed.value)
-      island.mesh.userData.dock.position.y = h + 0.2
-      island.mesh.userData.dockPosts.forEach(post => post.position.y = h + 1.2)
       island.mesh.userData.dockEndRing.position.y = h + 0.2
     }
   })
@@ -2092,11 +2090,12 @@ function update(dt) {
   const hPort  = getOceanHeight(px - Math.cos(playerAngle) * sideOff, pz - Math.sin(playerAngle) * sideOff, oceanTime, windAngle, windSpeed.value)
   const hStbd  = getOceanHeight(px + Math.cos(playerAngle) * sideOff, pz + Math.sin(playerAngle) * sideOff, oceanTime, windAngle, windSpeed.value)
 
+  const inertiaDampen = 0.45 // Heavy galleons cut through steep waves instead of surfing them perfectly
   const speedDampen = 1.0 / (1.0 + playerSpeed.value * 0.025)
-  playerShip.position.y = hCenter * speedDampen
+  playerShip.position.y = hCenter * inertiaDampen * speedDampen
 
-  const pitch = Math.atan2((hBow - hStern) * speedDampen, bowOff * 2) * 2.2
-  const roll  = Math.atan2((hPort - hStbd) * speedDampen, sideOff * 2) * 2.0
+  const pitch = Math.atan2((hBow - hStern) * inertiaDampen * speedDampen, bowOff * 2) * 2.2
+  const roll  = Math.atan2((hPort - hStbd) * inertiaDampen * speedDampen, sideOff * 2) * 2.0
   playerShip.rotation.x = pitch
   playerShip.rotation.z = roll
   playerShip.rotation.y = playerAngle
@@ -2366,16 +2365,17 @@ function update(dt) {
     // Update mesh — bob on waves
     mesh.position.x = enemy.x
     mesh.position.z = enemy.z
+    const inertiaDampen = 0.45
     const eH = getOceanHeight(enemy.x, enemy.z, oceanTime, windAngle, windSpeed.value)
-    mesh.position.y = eH
+    mesh.position.y = eH * inertiaDampen
     const eFwd = 4 * (shipType.size || 1)
     const eSide = 2 * (shipType.size || 1)
     const eHBow  = getOceanHeight(enemy.x + Math.sin(enemy.angle) * eFwd, enemy.z - Math.cos(enemy.angle) * eFwd, oceanTime, windAngle, windSpeed.value)
     const eHStern = getOceanHeight(enemy.x - Math.sin(enemy.angle) * eFwd, enemy.z + Math.cos(enemy.angle) * eFwd, oceanTime, windAngle, windSpeed.value)
     const eHPort  = getOceanHeight(enemy.x - Math.cos(enemy.angle) * eSide, enemy.z - Math.sin(enemy.angle) * eSide, oceanTime, windAngle, windSpeed.value)
     const eHStbd  = getOceanHeight(enemy.x + Math.cos(enemy.angle) * eSide, enemy.z + Math.sin(enemy.angle) * eSide, oceanTime, windAngle, windSpeed.value)
-    mesh.rotation.x = Math.atan2(eHBow - eHStern, eFwd * 2) * 1.8
-    mesh.rotation.z = Math.atan2(eHPort - eHStbd, eSide * 2) * 1.6
+    mesh.rotation.x = Math.atan2((eHBow - eHStern) * inertiaDampen, eFwd * 2) * 1.8
+    mesh.rotation.z = Math.atan2((eHPort - eHStbd) * inertiaDampen, eSide * 2) * 1.6
     mesh.rotation.y = enemy.angle
 
     // Animate enemy sails

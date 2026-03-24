@@ -12,16 +12,19 @@ const SWELL_C_X =  0.500,  SWELL_C_Z = -0.866
 // ─── Wave table shared between GPU and CPU ───
 // [dirX, dirZ, frequency, speed, amplitude, steepness(Q)]
 const WAVES = [
-  [SWELL_A_X, SWELL_A_Z, 0.012, 0.55, 3.50, 0.8],   // Massive primary swell
-  [SWELL_B_X, SWELL_B_Z, 0.025, 0.80, 1.20, 0.7],   // Large cross swell
-  [SWELL_C_X, SWELL_C_Z, 0.08, 1.30, 0.40, 0.6],    // Pronounced chop
-  [SWELL_A_X + 0.2, SWELL_A_Z - 0.1, 0.20, 2.00, 0.10, 0.4], // detail
+  // dirX, dirZ, freq, speed, amp, Q
+  [ 0.766, -0.642, 0.065, 0.65, 1.30, 0.95], // Primary North-West swell
+  [-0.939,  0.342, 0.081, 0.82, 0.65, 0.88], // Sharp East-South swell
+  [-0.173, -0.984, 0.120, 1.10, 0.25, 0.80], // Tight North wobble
+  [ 0.542,  0.840, 0.180, 1.45, 0.15, 0.70], // South-West chop
+  [-0.642, -0.766, 0.250, 1.90, 0.08, 0.60], // Micro North-East detail
+  [ 0.840,  0.542, 0.350, 2.40, 0.04, 0.50], // Fine South-West surface ripple
 ] as const
 
-const RIPPLE_FREQ  = 0.35
+const RIPPLE_FREQ  = 0.95
 const RIPPLE_SPEED = 2.6
-const RIPPLE_AMP   = 0.025
-const RIPPLE_Q     = 0.06
+const RIPPLE_AMP   = 0.070
+const RIPPLE_Q     = 0.85
 
 // ────────────────────────── vertex shader ──────────────────────────
 const vertexShader = `
@@ -37,10 +40,7 @@ const vertexShader = `
   varying float vFoam;
   varying float vDepth;
 
-  const vec2 swA = vec2(${SWELL_A_X}, ${SWELL_A_Z});
-  const vec2 swB = vec2(${SWELL_B_X}, ${SWELL_B_Z});
-  const vec2 swC = vec2(${SWELL_C_X}, ${SWELL_C_Z});
-  const vec2 swD = vec2(${(SWELL_A_X + 0.2).toFixed(4)}, ${(SWELL_A_Z - 0.1).toFixed(4)});
+  // Swells evaluated dynamically
 
   void gerstner(vec2 pos, vec2 dir, float freq, float spd, float amp, float Q,
                 inout vec3 disp, inout vec3 tX, inout vec3 tY) {
@@ -70,11 +70,8 @@ const vertexShader = `
     vec3 tX   = vec3(1.0, 0.0, 0.0);
     vec3 tY   = vec3(0.0, 1.0, 0.0);
 
-    gerstner(wc, swA, ${WAVES[0][2].toFixed(4)}, ${WAVES[0][3].toFixed(4)}, ${WAVES[0][4].toFixed(4)}, ${WAVES[0][5].toFixed(4)}, disp, tX, tY);
-    gerstner(wc, swB, ${WAVES[1][2].toFixed(4)}, ${WAVES[1][3].toFixed(4)}, ${WAVES[1][4].toFixed(4)}, ${WAVES[1][5].toFixed(4)}, disp, tX, tY);
-    gerstner(wc, swC, ${WAVES[2][2].toFixed(4)}, ${WAVES[2][3].toFixed(4)}, ${WAVES[2][4].toFixed(4)}, ${WAVES[2][5].toFixed(4)}, disp, tX, tY);
-    gerstner(wc, swD, ${WAVES[3][2].toFixed(4)}, ${WAVES[3][3].toFixed(4)}, ${WAVES[3][4].toFixed(4)}, ${WAVES[3][5].toFixed(4)}, disp, tX, tY);
-
+${WAVES.map((w, i) => `    gerstner(wc, vec2(${w[0].toFixed(4)}, ${w[1].toFixed(4)}), ${w[2].toFixed(4)}, ${w[3].toFixed(4)}, ${w[4].toFixed(4)}, ${w[5].toFixed(4)}, disp, tX, tY);`
+).join('\n')}
     vec2 w = normalize(uWindDir);
     float rAmp = ${RIPPLE_AMP.toFixed(4)} + uWindStrength * 0.003;
     gerstner(wc, w, ${RIPPLE_FREQ.toFixed(4)}, ${RIPPLE_SPEED.toFixed(4)}, rAmp, ${RIPPLE_Q.toFixed(4)}, disp, tX, tY);
@@ -140,19 +137,16 @@ const fragmentShader = `
     float NdotV = max(dot(N, V), 0.0);
     float NdotL = max(dot(N, sunDir), 0.0);
 
-    // ── Base water colour: Vivid blue / turquoise tint ──
-    vec3 abyssCol    = vec3(0.00, 0.20, 0.55); // Deep rich blue
-    vec3 deepCol     = vec3(0.00, 0.45, 0.75); // Vivid blue
-    vec3 midCol      = vec3(0.00, 0.65, 0.88); // Light bright blue
-    vec3 surfaceCol  = vec3(0.15, 0.85, 0.90); // Turquoise
-    vec3 crestCol    = vec3(0.40, 0.95, 0.95); // Bright Aqua at the very top
-
+    // ── Base water colour: Deep pure blues (Less green/turquoise) ──
+    vec3 deepOcean   = vec3(0.00, 0.07, 0.35); // Viscose deep blue
+    vec3 shallowCol  = vec3(0.05, 0.35, 0.70); // Strong pure blue
+    vec3 crestCol    = vec3(0.15, 0.65, 0.90); // Piercing light blue at peaks
+    
     // Adjust scale since amplitude is much higher now (up to ~5.0 total)
     float elev = clamp((vElevation + 3.0) / 6.0, 0.0, 1.0);
-    vec3 col = mix(abyssCol, deepCol,    smoothstep(0.0,  0.25, elev));
-    col = mix(col, midCol,               smoothstep(0.25, 0.50, elev));
-    col = mix(col, surfaceCol,           smoothstep(0.50, 0.75, elev));
-    col = mix(col, crestCol,             smoothstep(0.75, 1.0,  elev));
+    // Smooth interpolations based on elevation
+    vec3 col = mix(deepOcean, shallowCol, smoothstep(0.0, 0.5, elev));
+    col = mix(col, crestCol, smoothstep(0.5, 0.9, elev));
 
     // Darken the deep troughs slightly
     col *= mix(0.70, 1.0, elev);
@@ -211,26 +205,22 @@ const fragmentShader = `
     foam += max(streak1, 0.0) * 0.20 * smoothstep(0.5, 1.8, vElevation);
     foam += max(streak2, 0.0) * 0.10 * smoothstep(0.8, 2.0, vElevation);
 
-    // Breaking-crest whitecap at the very top of the wave (Stylized solid white)
-    // Very thin stripped crest
-    float crestWhite = smoothstep(0.92, 0.98, elev);
-    float crestNoise = hash(floor(vWorldPos * 2.5) - floor(t * 3.0)) * 0.5 + hash(floor(vWorldPos * 3.5 + t * 2.0)) * 0.5;
-    // Harder threshold for a painted/stylized solid white look
-    crestWhite *= smoothstep(0.3, 0.6, crestNoise + (elev - 0.85) * 2.0);
-    foam += crestWhite * 2.5; // Boost to ensure it hits pure white
+    // Breaking-crest whitecap: pure continuous thin line at the absolute top of the ridge
+    float crestLine = smoothstep(0.96, 0.99, elev); // Trigger only at the extreme 3% top edge
+    foam += crestLine * 1.5;
 
-    // Speckle foam on steep faces
-    float speckle = hash(floor(vWorldPos * 1.5)) * smoothstep(0.12, 0.25, 1.0 - abs(N.y));
-    foam += speckle * 0.25;
+    // Small speckle noise to add a bit of water detail, but entirely avoiding big blocks
+    float fineSpeckle = step(0.85, hash(floor(vWorldPos * 30.0 - vec2(t * 5.0, t * 5.0)))) * smoothstep(0.8, 0.95, elev);
+    foam += fineSpeckle * 0.4;
 
     // Pure white foam color to pop against the blue
     vec3 foamCol = vec3(1.0, 1.0, 1.0);
     col = mix(col, foamCol, clamp(foam, 0.0, 1.0));
 
-    // ── Alpha: More transparent to see the deeper sea floor ──
-    float alpha = mix(0.70, 0.92, elev);
-    alpha = mix(alpha, 1.0, fresnel * 0.8);
-    alpha = mix(alpha, 1.0, clamp(foam * 0.6, 0.0, 1.0));
+    // ── Alpha: Increased opacity ("less alpha" means less transparent) ──
+    float alpha = mix(0.85, 0.65, smoothstep(0.1, 0.9, elev));
+    // Foam makes water surface more visibly opaque
+    alpha = mix(alpha, 1.0, clamp(foam, 0.0, 1.0));
 
     // ── Tone-map ──
     col = col / (col + 0.55) * 1.2;

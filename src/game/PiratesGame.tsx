@@ -2218,125 +2218,72 @@ function update(dt) {
     // Skip AI for very distant enemies (already handled above, but double-check)
     if (distToPlayerSq > ACTIVE_DIST * ACTIVE_DIST) return
 
-    // Performance: Throttle AI updates
-    if (!aiThrottle) {
-      mesh.position.x = enemy.x
-      mesh.position.z = enemy.z
-      mesh.position.y = getOceanHeight(enemy.x, enemy.z, oceanTime, windAngle, windSpeed.value)
-      mesh.rotation.y = enemy.angle
-      return
-    }
-    // Performance: Skip AI for distant enemies
-    if (distToPlayer > ACTIVE_DIST) {
-      mesh.visible = distToPlayer <= ACTIVE_DIST + 100
-      mesh.position.x = enemy.x
-      mesh.position.z = enemy.z
-      mesh.position.y = getOceanHeight(enemy.x, enemy.z, oceanTime, windAngle, windSpeed.value)
-      mesh.rotation.y = enemy.angle
-      return
-    }
+    // Performance: Throttle EXPENSIVE AI decisions
+    if (aiThrottle || !enemy.targetAngle) {
+      // Enemy state machine
+      if (!enemy.state) enemy.state = 'IDLE'
 
-    // Within active range - full AI
-    mesh.visible = true
+      // State transitions based on distance
+      if (distToPlayer > ENEMY_IDLE_DIST) enemy.state = 'IDLE'
+      else if (distToPlayer > ENEMY_ATTACK_DIST) enemy.state = 'ALERT'
+      else enemy.state = 'ATTACKING'
 
-    // Enemy state machine
-    if (!enemy.state) enemy.state = 'IDLE'
+      let targetAngle = enemy.angle 
 
-    // State transitions based on distance
-    if (distToPlayer > ENEMY_IDLE_DIST) {
-      enemy.state = 'IDLE'
-    } else if (distToPlayer > ENEMY_ATTACK_DIST) {
-      enemy.state = 'ALERT'
-    } else {
-      enemy.state = 'ATTACKING'
-    }
-
-    let targetAngle = enemy.angle // Default: keep current direction
-
-    // Different behavior based on state
-    if (enemy.state === 'IDLE') {
-      // Wander randomly, don't chase player
-      if (!enemy.idleAngle || Math.random() < 0.01) {
-        enemy.idleAngle = enemy.angle + (Math.random() - 0.5) * 1.5
-      }
-      targetAngle = enemy.idleAngle
-    } else if (enemy.state === 'ALERT') {
-      // Start approaching player, but slower
-      targetAngle = Math.atan2(dx, dz)
-      // Slow movement toward player
-      enemy.speedMod = enemy.speedMod || 0.5
-    } else {
-      // ATTACKING - full chase behavior
-      enemy.speedMod = 1.0
-
-      if (enemy.type === 'RAMMER') {
-        // Rammers charge directly at player
-        targetAngle = Math.atan2(dx, dz)
-      } else if (enemy.type === 'NORMAL') {
-        // Normal ships try to stay at medium range and circle
-        if (distToPlayer > 35) {
-          targetAngle = Math.atan2(dx, dz)
-        } else if (distToPlayer < 20) {
-          targetAngle = Math.atan2(dx, dz) + Math.PI * 0.7
-        } else {
-          targetAngle = Math.atan2(dx, dz) + (index % 2 === 0 ? 0.5 : -0.5)
+      if (enemy.state === 'IDLE') {
+        if (!enemy.idleAngle || Math.random() < 0.02) {
+          enemy.idleAngle = enemy.angle + (Math.random() - 0.5) * 2.0
         }
-      } else if (enemy.type === 'BIG') {
-        // Big ships try to get broadside for maximum firepower
-        if (distToPlayer > 45) {
-          // Too far - approach while trying to angle correctly
-          targetAngle = Math.atan2(dx, dz)
-        } else if (distToPlayer < 25) {
-          // Too close - back off while turning to broadside
-          targetAngle = Math.atan2(dx, dz) + Math.PI * 0.5
-        } else {
-          // Good range - try to be perpendicular to player for broadside
-          // Circle to the side based on which side is closer to broadside
+        targetAngle = enemy.idleAngle
+      } else if (enemy.state === 'ALERT') {
+        targetAngle = Math.atan2(dx, dz)
+        enemy.speedMod = 0.5
+      } else {
+        enemy.speedMod = 1.0
+        if (enemy.type === 'RAMMER') targetAngle = Math.atan2(dx, dz)
+        else if (enemy.type === 'NORMAL') {
+          if (distToPlayer > 35) targetAngle = Math.atan2(dx, dz)
+          else if (distToPlayer < 20) targetAngle = Math.atan2(dx, dz) + Math.PI * 0.7
+          else targetAngle = Math.atan2(dx, dz) + (index % 2 === 0 ? 0.6 : -0.6)
+        } else if (enemy.type === 'BIG') {
           const perpAngle = Math.atan2(dx, dz) + Math.PI * 0.5
           const otherAngle = Math.atan2(dx, dz) - Math.PI * 0.5
-          // Pick the direction that gets us to broadside faster
           const angleDiff = Math.abs(enemy.angle - perpAngle)
           const otherDiff = Math.abs(enemy.angle - otherAngle)
           targetAngle = angleDiff < otherDiff ? perpAngle : otherAngle
         }
       }
+
+      // Check for islands ahead only
+      const lookAheadX = enemy.x + Math.sin(enemy.angle) * 18
+      const lookAheadZ = enemy.z + Math.cos(enemy.angle) * 18
+      const islandAhead = checkIslandCollision(lookAheadX, lookAheadZ, 6)
+      const oblivious = Math.random() < 0.1
+
+      let moveAngle = targetAngle
+      if (islandAhead && !oblivious) {
+        const leftCheck = checkIslandCollision(enemy.x + Math.sin(enemy.angle + 0.6) * 12, enemy.z + Math.cos(enemy.angle + 0.6) * 12, 6)
+        const rightCheck = checkIslandCollision(enemy.x + Math.sin(enemy.angle - 0.6) * 12, enemy.z + Math.cos(enemy.angle - 0.6) * 12, 6)
+        
+        if (!leftCheck && rightCheck) moveAngle = enemy.angle + 1.2
+        else if (!rightCheck && leftCheck) moveAngle = enemy.angle - 1.2
+        else if (!leftCheck && !rightCheck) moveAngle = enemy.angle + 1.5
+        else moveAngle = enemy.angle + Math.PI
+        
+        enemy.speedMod = 0.4 // Slow down to turn
+      }
+      
+      enemy.targetAngle = moveAngle
     }
 
-    // Check for islands ahead only (enemies ignore rocks for avoidance)
-    const lookAheadX = enemy.x + Math.sin(enemy.angle) * 15
-    const lookAheadZ = enemy.z + Math.cos(enemy.angle) * 15
-    const islandAhead = checkIslandCollision(lookAheadX, lookAheadZ, 5)
+    // Smoothly turn toward target (ALWAYS runs every frame)
+    let diff = enemy.targetAngle - enemy.angle
+    while (diff > Math.PI) diff -= Math.PI * 2
+    while (diff < -Math.PI) diff += Math.PI * 2
+    enemy.angle += diff * dt * shipType.turnSpeed
 
-    // 15% chance to not notice obstacle (stupid AI)
-    const oblivious = Math.random() < 0.15
-
-    let moveAngle = targetAngle
-
-    if (islandAhead && !oblivious) {
-      const leftCheck = checkIslandCollision(
-        enemy.x + Math.sin(enemy.angle + 0.5) * 10,
-        enemy.z + Math.cos(enemy.angle + 0.5) * 10, 5
-      )
-      const rightCheck = checkIslandCollision(
-        enemy.x + Math.sin(enemy.angle - 0.5) * 10,
-        enemy.z + Math.cos(enemy.angle - 0.5) * 10, 5
-      )
-
-      // 20% chance to pick wrong direction even if one is clear
-      const wrongChoice = Math.random() < 0.2
-
-      if (!leftCheck && rightCheck && !wrongChoice) moveAngle = enemy.angle + 0.8 * dt
-      else if (!rightCheck && leftCheck && !wrongChoice) moveAngle = enemy.angle - 0.8 * dt
-      else if (!leftCheck && !rightCheck) moveAngle = enemy.angle + (Math.random() > 0.5 ? 0.8 : -0.8) * dt
-      else moveAngle = enemy.angle + Math.PI
-    }
-
-    // Smoothly turn toward target
-    enemy.angle += (moveAngle - enemy.angle) * dt * shipType.turnSpeed
-
-    // Move at speed based on type and state
+    // Move at speed (ALWAYS runs every frame)
     let speedMult = enemy.speedMod || 1.0
-    if (islandAhead) speedMult *= 0.5
     const enemySpeed = shipType.speed * speedMult
     enemy.x += Math.sin(enemy.angle) * enemySpeed * dt
     enemy.z += Math.cos(enemy.angle) * enemySpeed * dt

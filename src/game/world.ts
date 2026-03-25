@@ -96,8 +96,8 @@ export function spawnRock(scene: THREE.Scene, x: number, z: number) {
   const scaleZ = 1.3 + Math.random() * 0.5
   rock.scale.set(scaleX, scaleY, scaleZ)
 
-  // Position so the rock sits partially above and below the water line
-  rock.position.y = -rockRadius * scaleY * 0.4
+  // Position so most of the rock is submerged — only the top pokes above water
+  rock.position.y = -rockRadius * scaleY * 0.7
   rock.rotation.set(
     (Math.random() - 0.5) * 0.4,
     Math.random() * Math.PI,
@@ -121,7 +121,7 @@ export function spawnRock(scene: THREE.Scene, x: number, z: number) {
     )
     sat.position.set(
       Math.cos(angle) * dist,
-      -satRadius * satScaleY * 0.5,
+      -satRadius * satScaleY * 0.8,
       Math.sin(angle) * dist
     )
     sat.rotation.set(

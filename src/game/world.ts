@@ -82,19 +82,59 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number) {
 }
 
 export function spawnRock(scene: THREE.Scene, x: number, z: number) {
+  const rockGroup = new THREE.Group()
   const rockRadius = 4 + Math.random() * 6
-  const rockGeom = new THREE.DodecahedronGeometry(rockRadius, 1) // 1 adds jagged detail
+
+  // ── Main boulder ──
+  const rockGeom = new THREE.DodecahedronGeometry(rockRadius, 1)
   const rockMat = new THREE.MeshPhongMaterial({ color: 0x696969 })
   const rock = new THREE.Mesh(rockGeom, rockMat)
 
-  // Stretch into a sea stack pillar to reach the -18 sea floor
-  const heightScale = 3.0 + Math.random() * 2.0
-  rock.scale.set(1, heightScale, 1)
-  rock.position.set(x, -rockRadius * heightScale * 0.35, z)
-  rock.rotation.set(Math.random() * 0.2, Math.random() * Math.PI, Math.random() * 0.2)
-  
-  scene.add(rock)
-  return { x, z, radius: rockRadius, mesh: rock }
+  // Squat, wide boulder — NOT a tall pillar
+  const scaleX = 1.3 + Math.random() * 0.5
+  const scaleY = 1.2 + Math.random() * 0.6  // much flatter than before (was 3-5)
+  const scaleZ = 1.3 + Math.random() * 0.5
+  rock.scale.set(scaleX, scaleY, scaleZ)
+
+  // Position so the rock sits partially above and below the water line
+  rock.position.y = -rockRadius * scaleY * 0.4
+  rock.rotation.set(
+    (Math.random() - 0.5) * 0.4,
+    Math.random() * Math.PI,
+    (Math.random() - 0.5) * 0.4
+  )
+  rockGroup.add(rock)
+
+  // ── 1-2 smaller satellite rocks around the main boulder ──
+  const numSatellites = 1 + Math.floor(Math.random() * 2)
+  for (let i = 0; i < numSatellites; i++) {
+    const satRadius = rockRadius * (0.3 + Math.random() * 0.35)
+    const satGeom = new THREE.DodecahedronGeometry(satRadius, 1)
+    const sat = new THREE.Mesh(satGeom, rockMat)
+    const angle = Math.random() * Math.PI * 2
+    const dist = rockRadius * (0.8 + Math.random() * 0.6)
+    const satScaleY = 0.8 + Math.random() * 0.6
+    sat.scale.set(
+      1.0 + Math.random() * 0.4,
+      satScaleY,
+      1.0 + Math.random() * 0.4
+    )
+    sat.position.set(
+      Math.cos(angle) * dist,
+      -satRadius * satScaleY * 0.5,
+      Math.sin(angle) * dist
+    )
+    sat.rotation.set(
+      (Math.random() - 0.5) * 0.6,
+      Math.random() * Math.PI,
+      (Math.random() - 0.5) * 0.6
+    )
+    rockGroup.add(sat)
+  }
+
+  rockGroup.position.set(x, 0, z)
+  scene.add(rockGroup)
+  return { x, z, radius: rockRadius + 2, mesh: rockGroup }
 }
 
 export function spawnSunkenShip(scene: THREE.Scene, x: number, z: number) {

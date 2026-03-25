@@ -166,6 +166,7 @@ let anchorAnimating = false
 let anchorMesh = null
 let anchorAnimProgress = 0   // 0 = fully raised, 1 = fully dropped
 let anchorAnimDir = 0        // 1 = dropping, -1 = raising
+let collisionCooldown = 0    // seconds remaining before next collision damage
 
 // Parrot state
 let parrotGroup: THREE.Group | null = null
@@ -2120,8 +2121,72 @@ function update(dt) {
   }
 
   // Apply momentum to position
+  const prevX = playerPos.value.x
+  const prevZ = playerPos.value.z
   playerPos.value.x += Math.sin(playerAngle) * playerSpeed.value * dt
   playerPos.value.z += Math.cos(playerAngle) * playerSpeed.value * dt
+
+  // ── Player collision with islands and rocks ──
+  collisionCooldown = Math.max(0, collisionCooldown - dt)
+  const shipRadius = 5 // approximate ship collision radius
+  let hitObstacle = null
+  let hitIsRock = false
+
+  // Check islands (both static and procedural)
+  for (const island of [...islands, ...worldObjects.islands]) {
+    const dx = playerPos.value.x - island.x
+    const dz = playerPos.value.z - island.z
+    const dist = Math.sqrt(dx * dx + dz * dz)
+    if (dist < island.radius + shipRadius) {
+      hitObstacle = island
+      hitIsRock = false
+      break
+    }
+  }
+
+  // Check rocks (both static and procedural)
+  if (!hitObstacle) {
+    for (const rock of [...rocks, ...worldObjects.rocks]) {
+      const dx = playerPos.value.x - rock.x
+      const dz = playerPos.value.z - rock.z
+      const dist = Math.sqrt(dx * dx + dz * dz)
+      if (dist < rock.radius + shipRadius) {
+        hitObstacle = rock
+        hitIsRock = true
+        break
+      }
+    }
+  }
+
+  if (hitObstacle) {
+    // Push player back out of the obstacle
+    const dx = playerPos.value.x - hitObstacle.x
+    const dz = playerPos.value.z - hitObstacle.z
+    const dist = Math.sqrt(dx * dx + dz * dz) || 0.01
+    const overlap = (hitObstacle.radius + shipRadius) - dist
+    const pushX = (dx / dist) * (overlap + 1)
+    const pushZ = (dz / dist) * (overlap + 1)
+    playerPos.value.x = prevX + pushX * 0.5
+    playerPos.value.z = prevZ + pushZ * 0.5
+
+    // Apply damage based on speed (with cooldown)
+    const impactSpeed = playerSpeed.value
+    if (collisionCooldown <= 0 && impactSpeed > 1) {
+      const dmgMultiplier = hitIsRock ? 2 : 1
+      const damage = Math.floor(impactSpeed * dmgMultiplier)
+      hp.value = Math.max(0, hp.value - damage)
+      collisionCooldown = 1.0 // 1 second cooldown
+
+      if (hitIsRock) {
+        showMessage(`Hit a rock! -${damage} HP`, 2000)
+      } else {
+        showMessage(`Ran aground! -${damage} HP`, 2000)
+      }
+    }
+
+    // Kill speed on impact
+    playerSpeed.value = Math.max(0, playerSpeed.value * 0.1)
+  }
 
   // Infinite world - check procedural spawns every 20 frames (not every frame)
   spawnCheckFrameCounter++

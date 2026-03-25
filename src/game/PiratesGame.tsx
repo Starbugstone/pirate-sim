@@ -14,6 +14,7 @@ import { createOcean, updateOcean, getOceanHeight, createSprayPool, emitSpray, u
 import { createPlayerShip as buildPlayerShip, createEnemyShipMesh } from './ships'
 import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
 import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake } from './effects'
+import { createAmbientFish, updateAmbientFish } from './ambientFish'
 const makeRef = (value) => ({ value })
 const computed = (getter) => ({
   get value() {
@@ -168,6 +169,7 @@ let anchorAnimDir = 0        // 1 = dropping, -1 = raising
 
 // Parrot state
 let parrotGroup: THREE.Group | null = null
+let fishMesh: THREE.InstancedMesh | null = null
 
 // Camera - 0 = behind (navigation), 1 = top-down (fighting)
 let cameraMode = 0 // Start in behind view
@@ -500,6 +502,8 @@ function createPlayerShipLocal() {
 
 // Spawn enemy ships - one of each type
 function spawnEnemyShip() {
+  // Ambient Fish
+  if (!fishMesh) fishMesh = createAmbientFish(scene)
   // Clear existing enemies
   enemyShipMeshes.forEach(mesh => scene.remove(mesh))
   enemyShipMeshes = []
@@ -593,10 +597,11 @@ function createKrakenLocal() {
 }
 
 // Treasure functions
-function spawnTreasure(x, z, baseGold = 50, showMsg = true) {
-  // Hard cap on treasures - remove oldest if at limit
+function spawnTreasure(x, z, baseGold = 50, showMsg = true, permanent = false) {
+  // Hard cap on treasures - remove oldest non-permanent if at limit
   if (treasures.value.length >= MAX_TREASURES) {
-    const old = treasures.value.shift()
+    const skipIndex = treasures.value.findIndex(t => !t.permanent)
+    const old = skipIndex !== -1 ? treasures.value.splice(skipIndex, 1)[0] : treasures.value.shift()
     if (old) {
       if (old.mesh) disposeMesh(old.mesh)
       if (old.ringMesh) disposeMesh(old.ringMesh)
@@ -629,7 +634,8 @@ function spawnTreasure(x, z, baseGold = 50, showMsg = true) {
     z: z,
     mesh: chest,
     ringMesh: ring,
-    timer: 60, // 60 seconds
+    timer: 60, // 60 seconds (ignored if permanent)
+    permanent: permanent,
     collecting: false,
     collected: false,
     collectFade: 1.0,
@@ -915,7 +921,7 @@ function spawnChunk(cx, cz) {
       const wreck = buildSunkenShip(scene, sx, sz)
       worldObjects.ships = worldObjects.ships || []
       worldObjects.ships.push(wreck)
-      spawnTreasure(sx, sz, 75, false)
+      spawnTreasure(sx, sz, 75, false, true)
     }
   }
 }
@@ -976,6 +982,60 @@ function cleanupDistantChunks() {
     }
   }
 
+  // Clean ships queue mesh for gradual disposal
+  if (worldObjects.ships) {
+    for (let i = worldObjects.ships.length - 1; i >= 0; i--) {
+      const ship = worldObjects.ships[i]
+      const dx = ship.x - px
+      const dz = ship.z - pz
+      if (Math.sqrt(dx*dx + dz*dz) > maxDist) {
+        queueForDisposal(ship.mesh)
+        worldObjects.ships.splice(i, 1)
+      }
+    }
+  }
+
+  // Clean permanent distant treasures
+  for (let i = treasures.value.length - 1; i >= 0; i--) {
+    const t = treasures.value[i]
+    if (t.permanent) {
+      const dx = t.x - px
+      const dz = t.z - pz
+      if (Math.sqrt(dx*dx + dz*dz) > maxDist) {
+        if (t.mesh) queueForDisposal(t.mesh)
+        if (t.ringMesh) queueForDisposal(t.ringMesh)
+        treasures.value.splice(i, 1)
+      }
+    }
+  }
+
+  // Clean ships queue mesh for gradual disposal
+  if (worldObjects.ships) {
+    for (let i = worldObjects.ships.length - 1; i >= 0; i--) {
+      const ship = worldObjects.ships[i]
+      const dx = ship.x - px
+      const dz = ship.z - pz
+      if (Math.sqrt(dx*dx + dz*dz) > maxDist) {
+        queueForDisposal(ship.mesh)
+        worldObjects.ships.splice(i, 1)
+      }
+    }
+  }
+
+  // Clean permanent distant treasures
+  for (let i = treasures.value.length - 1; i >= 0; i--) {
+    const t = treasures.value[i]
+    if (t.permanent) {
+      const dx = t.x - px
+      const dz = t.z - pz
+      if (Math.sqrt(dx*dx + dz*dz) > maxDist) {
+        if (t.mesh) queueForDisposal(t.mesh)
+        if (t.ringMesh) queueForDisposal(t.ringMesh)
+        treasures.value.splice(i, 1)
+      }
+    }
+  }
+
   // Clean chunk references beyond 4 chunks
   for (const key of [...spawnedChunks]) {
     const [cx, cz] = key.split(',').map(Number)
@@ -1023,17 +1083,15 @@ function updateTreasure(dt) {
       continue
     }
 
-    // Update timer
-    t.timer -= dt
-
     // Check player distance
     const dx = playerPos.value.x - t.x
     const dz = playerPos.value.z - t.z
     const dist = Math.sqrt(dx * dx + dz * dz)
 
-    // Reset timer if player enters zone
-    if (dist < 10) {
-      t.timer = 60
+    // Update timer if not permanent
+    if (!t.permanent) {
+      t.timer -= dt
+      if (dist < 10) t.timer = 60 // Reset timer if near
     }
 
     // Check for collection (only one at a time to prevent spam)
@@ -1083,7 +1141,7 @@ function updateTreasure(dt) {
     }
 
     // Expired treasure - fade out and sink
-    if (t.timer <= 0) {
+    if (!t.permanent && t.timer <= 0) {
       showMessage('Treasure lost to the sea...', 2000)
       // Fade out and sink
       t.collected = true
@@ -1941,6 +1999,7 @@ function update(dt) {
     updateOcean(oceanMesh, oceanTime, playerPos.value.x, playerPos.value.z, windAngle, windSpeed.value)
   }
   if (sprayPool) updateSpray(sprayPool, dt)
+  if (fishMesh) updateAmbientFish(fishMesh, dt, oceanTime, playerPos.value.x, playerPos.value.z)
 
   // Floating Docks and Harbours (Static islands array and procedural islands array)
   const allIslands = [...islands, ...worldObjects.islands]

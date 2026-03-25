@@ -73,9 +73,12 @@ const vertexShader = `
 
 ${WAVES.map((w, i) => `    gerstner(wc, vec2(${w[0].toFixed(4)}, ${w[1].toFixed(4)}), ${w[2].toFixed(4)}, ${w[3].toFixed(4)}, ${w[4].toFixed(4)}, ${w[5].toFixed(4)}, disp, tX, tY);`
 ).join('\n')}
-    vec2 w = normalize(uWindDir);
-    float rAmp = ${RIPPLE_AMP.toFixed(4)} + uWindStrength * 0.003;
-    gerstner(wc, w, ${RIPPLE_FREQ.toFixed(4)}, ${RIPPLE_SPEED.toFixed(4)}, rAmp, ${RIPPLE_Q.toFixed(4)}, disp, tX, tY);
+    // Hardcode the micro-ripple direction to avoid phase-sweep jitter on wind shift
+    vec2 w = normalize(vec2(0.8, 0.6));
+    float rAmp = 0.070 + uWindStrength * 0.003;
+    
+    // Evaluate using absolute world coordinates so the boat sails THROUGH the sea, not WITH it
+    gerstner(wc, w, 0.9500, 2.6000, rAmp, 0.8500, disp, tX, tY);
 
     vec3 pos = position;
     pos.xy += disp.xz;
@@ -236,9 +239,12 @@ const fragmentShader = `
 
 const sandVertexShader = `
   #include <fog_pars_vertex>
-  varying vec2 vUv;
+  varying vec2 vWorldXZ;
   void main() {
-    vUv = uv;
+    // Pass WORLD-SPACE xz so the sand pattern stays geographically fixed
+    // even though the plane itself tracks the player.
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vWorldXZ = worldPos.xz;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mvPosition;
     #include <fog_vertex>
@@ -247,7 +253,7 @@ const sandVertexShader = `
 
 const sandFragmentShader = `
   #include <fog_pars_fragment>
-  varying vec2 vUv;
+  varying vec2 vWorldXZ;
 
   // Simple pseudo-random hash
   float hash(vec2 p) {
@@ -279,8 +285,8 @@ const sandFragmentShader = `
   }
 
   void main() {
-    // Large scaling for the vast ocean floor
-    vec2 p = vUv * 800.0;
+    // Use world-space XZ so patterns stay fixed geographically
+    vec2 p = vWorldXZ * 0.4;
     
     // Create sand ripple effect
     float ripples = sin(p.x * 2.0 + noise(p * 0.2) * 4.0) * 0.5 + 0.5;
@@ -305,6 +311,9 @@ const sandFragmentShader = `
 `
 
 // ────────────────────────── runtime API ──────────────────────────
+let oceanCenterX = 0;
+let oceanCenterZ = 0;
+
 export function createOcean(scene: THREE.Scene): THREE.Mesh {
   // Procedural sandy backing plane visible through the alpha transparency
   const deepGeom = new THREE.PlaneGeometry(OCEAN_SIZE * 2, OCEAN_SIZE * 2)
@@ -359,6 +368,9 @@ export function updateOcean(
   windAngle: number,
   windStrength: number
 ) {
+  oceanCenterX = playerX
+  oceanCenterZ = playerZ
+
   mesh.position.x = playerX
   mesh.position.z = playerZ
   if (mesh.userData.deepPlane) {
@@ -388,10 +400,12 @@ export function getOceanHeight(
   for (const [dx, dz, freq, speed, amp] of WAVES) {
     h += amp * Math.sin((worldX * dx + worldZ * dz) * freq + time * speed)
   }
-  const wdx = Math.sin(windAngle)
-  const wdz = Math.cos(windAngle)
-  const rAmp = RIPPLE_AMP + windStrength * 0.003
-  h += rAmp * Math.sin((worldX * wdx + worldZ * wdz) * RIPPLE_FREQ + time * RIPPLE_SPEED)
+  // Hardcode micro-ripple direction matching the shader
+  const wdx = 0.8
+  const wdz = 0.6
+  const len = Math.sqrt(wdx*wdx + wdz*wdz)
+  const rAmp = 0.070 + windStrength * 0.003
+  h += rAmp * Math.sin((worldX * (wdx/len) + worldZ * (wdz/len)) * 0.9500 + time * 2.6000)
   return h
 }
 

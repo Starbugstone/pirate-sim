@@ -5,8 +5,8 @@ export const SHIP_TYPES = {
   BIG: { name: 'Galleon', hp: 200, speed: 4, turnSpeed: 1.0, rammingDamage: 10, cannonDamage: 15, color: 0x000080, size: 1.8 }
 }
 
-export const OCEAN_SIZE = 512
-export const OCEAN_SEGMENTS = 200
+export const OCEAN_SIZE = 2000
+export const OCEAN_SEGMENTS = 500
 
 export const MAX_TREASURES = 10
 export const MAX_CANNONBALLS = 40

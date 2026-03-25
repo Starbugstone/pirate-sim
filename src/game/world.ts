@@ -12,13 +12,16 @@ export function createSky(scene: THREE.Scene) {
 
 export function spawnIsland(scene: THREE.Scene, x: number, z: number) {
   const islandGroup = new THREE.Group()
-  const islandSize = 20 + Math.random() * 25
-  const islandHeight = 6 + islandSize * 0.3
+  const islandSize = 30 + Math.random() * 35 // Much bigger
+  const islandHeight = 8 + islandSize * 0.3
 
-  const sandGeom = new THREE.ConeGeometry(islandSize, islandHeight, 8)
+  // Stretch the cone down to the sea floor (y = -18)
+  const totalH = islandHeight + 18.0
+  const bottomRadius = islandSize * (totalH / islandHeight)
+  const sandGeom = new THREE.ConeGeometry(bottomRadius, totalH, 8)
   const sandMat = new THREE.MeshPhongMaterial({ color: 0xF4A460 })
   const sand = new THREE.Mesh(sandGeom, sandMat)
-  sand.position.y = islandHeight / 2
+  sand.position.y = (islandHeight - 18.0) / 2
   islandGroup.add(sand)
 
   const numTrees = Math.floor(1 + islandSize / 20)
@@ -79,13 +82,19 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number) {
 }
 
 export function spawnRock(scene: THREE.Scene, x: number, z: number) {
-  const rockGeom = new THREE.DodecahedronGeometry(2 + Math.random() * 3)
+  const rockRadius = 4 + Math.random() * 6
+  const rockGeom = new THREE.DodecahedronGeometry(rockRadius, 1) // 1 adds jagged detail
   const rockMat = new THREE.MeshPhongMaterial({ color: 0x696969 })
   const rock = new THREE.Mesh(rockGeom, rockMat)
-  rock.position.set(x, 0.5, z)
-  rock.rotation.set(Math.random(), Math.random(), Math.random())
+
+  // Stretch into a sea stack pillar to reach the -18 sea floor
+  const heightScale = 3.0 + Math.random() * 2.0
+  rock.scale.set(1, heightScale, 1)
+  rock.position.set(x, -rockRadius * heightScale * 0.35, z)
+  rock.rotation.set(Math.random() * 0.2, Math.random() * Math.PI, Math.random() * 0.2)
+  
   scene.add(rock)
-  return { x, z, radius: 3, mesh: rock }
+  return { x, z, radius: rockRadius, mesh: rock }
 }
 
 export function spawnSunkenShip(scene: THREE.Scene, x: number, z: number) {

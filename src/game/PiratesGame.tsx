@@ -459,8 +459,8 @@ function processDisposalQueue() {
 
 function init() {
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x87CEEB)
-  scene.fog = null
+  scene.background = new THREE.Color(0x87ceeb)
+  scene.fog = new THREE.Fog(0x87ceeb, 80, 420)
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000)
   camera.position.set(0, 30, -40)
   camera.lookAt(0, 0, 0)

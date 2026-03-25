@@ -28,6 +28,7 @@ const RIPPLE_Q     = 0.85
 
 // ────────────────────────── vertex shader ──────────────────────────
 const vertexShader = `
+  #include <fog_pars_vertex>
   uniform float uTime;
   uniform vec2  uWorldOffset;
   uniform vec2  uWindDir;
@@ -94,12 +95,15 @@ ${WAVES.map((w, i) => `    gerstner(wc, vec2(${w[0].toFixed(4)}, ${w[1].toFixed(
 
     vDepth = clamp((-disp.y + 1.0) / 4.0, 0.0, 1.0);
 
-    gl_Position = projectionMatrix * viewMatrix * wp;
+    vec4 mvPosition = viewMatrix * wp;
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
   }
 `
 
 // ────────────────────────── fragment shader ──────────────────────────
 const fragmentShader = `
+  #include <fog_pars_fragment>
   uniform float uTime;
   uniform vec2  uWindDir;
   uniform float uWindStrength;
@@ -226,18 +230,23 @@ const fragmentShader = `
     col = col / (col + 0.55) * 1.2;
 
     gl_FragColor = vec4(col, alpha);
+    #include <fog_fragment>
   }
 `
 
 const sandVertexShader = `
+  #include <fog_pars_vertex>
   varying vec2 vUv;
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
   }
 `
 
 const sandFragmentShader = `
+  #include <fog_pars_fragment>
   varying vec2 vUv;
 
   // Simple pseudo-random hash
@@ -291,6 +300,7 @@ const sandFragmentShader = `
     color -= ripples * 0.08;
 
     gl_FragColor = vec4(color, 1.0);
+    #include <fog_fragment>
   }
 `
 
@@ -301,6 +311,8 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
   const deepMat  = new THREE.ShaderMaterial({
     vertexShader: sandVertexShader,
     fragmentShader: sandFragmentShader,
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib['fog']]),
+    fog: true,
     side: THREE.FrontSide
   })
   const deepPlane = new THREE.Mesh(deepGeom, deepMat)
@@ -314,15 +326,18 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
   const material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
-    uniforms: {
-      uTime:         { value: 0 },
-      uWorldOffset:  { value: new THREE.Vector2(0, 0) },
-      uWindDir:      { value: new THREE.Vector2(0, 1) },
-      uWindStrength: { value: 3 }
-    },
+    uniforms: THREE.UniformsUtils.merge([
+      THREE.UniformsLib['fog'],
+      {
+        uTime:         { value: 0 },
+        uWorldOffset:  { value: new THREE.Vector2(0, 0) },
+        uWindDir:      { value: new THREE.Vector2(0, 1) },
+        uWindStrength: { value: 3 }
+      }
+    ]),
     transparent: true,
     side: THREE.DoubleSide,
-    fog: false,
+    fog: true,
     depthWrite: true
   })
 

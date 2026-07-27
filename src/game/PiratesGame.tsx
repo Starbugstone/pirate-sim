@@ -763,17 +763,14 @@ function spawnChunk(cx, cz) {
   // Skip ships in starting chunk (0,0) - spawnEnemyShip handles initial enemies
   const isStartingChunk = (cx === 0 && cz === 0)
 
-  // 40% chance of island per chunk, then 1-2 islands
-  if (Math.random() < 0.4) {
-    const numIslands = 1 + Math.floor(Math.random() * 2)
-    for (let i = 0; i < numIslands; i++) {
-      const angle = Math.random() * Math.PI * 2
-      const maxDist = (CHUNK_SIZE / 2) - 40 // Keep 40 units from edge
-      const dist = 20 + Math.random() * maxDist
-      const ix = worldX + Math.cos(angle) * dist
-      const iz = worldZ + Math.sin(angle) * dist
-      worldObjects.islands.push(buildIsland(scene, ix, iz))
-    }
+  // 20% chance of island per chunk — rarer, only 1
+  if (Math.random() < 0.2) {
+    const angle = Math.random() * Math.PI * 2
+    const maxDist = (CHUNK_SIZE / 2) - 50
+    const dist = 25 + Math.random() * maxDist
+    const ix = worldX + Math.cos(angle) * dist
+    const iz = worldZ + Math.sin(angle) * dist
+    worldObjects.islands.push(buildIsland(scene, ix, iz))
   }
 
   // Spawn rocks (3-6 per chunk) - away from borders
@@ -1385,6 +1382,32 @@ function updateCannonballs(dt) {
     }
 
     if (ball.life <= 0) {
+      disposeMesh(ball.mesh)
+      cannonballs.splice(i, 1)
+      continue
+    }
+
+    // Check collision with islands and rocks — cannonballs smash into terrain
+    let hitTerrain = false
+    for (const island of [...islands, ...worldObjects.islands]) {
+      const dx = ball.mesh.position.x - island.x
+      const dz = ball.mesh.position.z - island.z
+      if (Math.sqrt(dx * dx + dz * dz) < island.radius) {
+        hitTerrain = true
+        break
+      }
+    }
+    if (!hitTerrain) {
+      for (const rock of [...rocks, ...worldObjects.rocks]) {
+        const dx = ball.mesh.position.x - rock.x
+        const dz = ball.mesh.position.z - rock.z
+        if (Math.sqrt(dx * dx + dz * dz) < rock.radius + 2) {
+          hitTerrain = true
+          break
+        }
+      }
+    }
+    if (hitTerrain) {
       disposeMesh(ball.mesh)
       cannonballs.splice(i, 1)
     }

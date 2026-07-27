@@ -12,38 +12,68 @@ export function createSky(scene: THREE.Scene) {
 
 export function spawnIsland(scene: THREE.Scene, x: number, z: number) {
   const islandGroup = new THREE.Group()
-  const islandSize = 30 + Math.random() * 35 // Much bigger
-  const islandHeight = 8 + islandSize * 0.3
+  // Much wider size range — small atolls to large harbours
+  const islandSize = 15 + Math.random() * 65
+  const islandHeight = 5 + islandSize * 0.25
 
-  // Stretch the cone down to the sea floor (y = -18)
-  const totalH = islandHeight + 18.0
-  const bottomRadius = islandSize * (totalH / islandHeight)
-  const sandGeom = new THREE.ConeGeometry(bottomRadius, totalH, 8)
+  // ── Organic landmass: 2-4 overlapping mounds ──
+  const numMounds = 2 + Math.floor(Math.random() * 3)
   const sandMat = new THREE.MeshPhongMaterial({ color: 0xF4A460 })
-  const sand = new THREE.Mesh(sandGeom, sandMat)
-  sand.position.y = (islandHeight - 18.0) / 2
-  islandGroup.add(sand)
+  const grassMat = new THREE.MeshPhongMaterial({ color: 0x5a8a3a })
 
-  const numTrees = Math.floor(1 + islandSize / 20)
+  for (let m = 0; m < numMounds; m++) {
+    const moundScale = 0.5 + Math.random() * 0.6
+    const moundRadius = islandSize * moundScale
+    const moundH = islandHeight * moundScale * (0.6 + Math.random() * 0.5)
+    const totalH = moundH + 18.0
+    const bottomR = moundRadius * (totalH / moundH)
+    const segments = 6 + Math.floor(Math.random() * 4) // vary polygon count
+    const geom = new THREE.ConeGeometry(bottomR, totalH, segments)
+    const mat = Math.random() < 0.3 ? grassMat : sandMat
+    const mound = new THREE.Mesh(geom, mat)
+    // Offset mounds from center for organic shape
+    const offAngle = Math.random() * Math.PI * 2
+    const offDist = m === 0 ? 0 : islandSize * 0.2 * Math.random()
+    mound.position.set(
+      Math.cos(offAngle) * offDist,
+      (moundH - 18.0) / 2,
+      Math.sin(offAngle) * offDist
+    )
+    mound.rotation.y = Math.random() * Math.PI
+    islandGroup.add(mound)
+  }
+
+  // ── Palm trees — more on bigger islands ──
+  const numTrees = Math.floor(2 + islandSize / 12)
   for (let t = 0; t < numTrees; t++) {
-    const treeX = (Math.random() - 0.5) * islandSize * 0.6
-    const treeZ = (Math.random() - 0.5) * islandSize * 0.6
+    const treeAngle = Math.random() * Math.PI * 2
+    const treeDist = Math.random() * islandSize * 0.5
+    const treeX = Math.cos(treeAngle) * treeDist
+    const treeZ = Math.sin(treeAngle) * treeDist
 
-    const trunkGeom = new THREE.CylinderGeometry(0.3, 0.4, 5 + islandSize * 0.1)
+    const trunkH = 4 + islandSize * 0.08 + Math.random() * 2
+    const trunkGeom = new THREE.CylinderGeometry(0.25, 0.4, trunkH)
     const trunkMat = new THREE.MeshPhongMaterial({ color: 0x8B4513 })
     const trunk = new THREE.Mesh(trunkGeom, trunkMat)
-    trunk.position.set(treeX, islandHeight / 2 + 2 + islandSize * 0.05, treeZ)
+    trunk.position.set(treeX, islandHeight / 2 + trunkH / 2 - 1, treeZ)
+    // Slight lean for organic feel
+    trunk.rotation.z = (Math.random() - 0.5) * 0.15
+    trunk.rotation.x = (Math.random() - 0.5) * 0.15
     islandGroup.add(trunk)
 
-    const leavesGeom = new THREE.ConeGeometry(3 + islandSize * 0.1, 4 + islandSize * 0.05, 8)
+    const leavesGeom = new THREE.ConeGeometry(2.5 + Math.random() * 2, 3.5 + Math.random() * 1.5, 7)
     const leavesMat = new THREE.MeshPhongMaterial({ color: 0x228B22 })
     const leaves = new THREE.Mesh(leavesGeom, leavesMat)
-    leaves.position.set(treeX, islandHeight / 2 + 4 + islandSize * 0.1, treeZ)
+    leaves.position.set(treeX, islandHeight / 2 + trunkH + 0.5, treeZ)
     islandGroup.add(leaves)
   }
 
-  if (Math.random() < 0.3) {
-    const dockLength = 12 + islandSize * 0.4
+  // ── Dock: bigger islands have higher chance ──
+  const dockChance = Math.min(0.65, 0.15 + islandSize / 120)
+  const hasDock = Math.random() < dockChance
+
+  if (hasDock) {
+    const dockLength = 10 + islandSize * 0.3
     const dockGeom = new THREE.BoxGeometry(dockLength, 0.3, 4)
     const dockMat = new THREE.MeshPhongMaterial({ color: 0x8B4513 })
     const dock = new THREE.Mesh(dockGeom, dockMat)
@@ -74,6 +104,40 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number) {
     islandGroup.userData.dock = dock
     islandGroup.userData.dockPosts = posts
     islandGroup.userData.dockEndRing = dockEndRing
+
+    // ── Buildings on dock islands ──
+    const numBuildings = 1 + Math.floor(Math.random() * 3)
+    const buildingMats = [
+      new THREE.MeshPhongMaterial({ color: 0xd4b896 }), // tan walls
+      new THREE.MeshPhongMaterial({ color: 0xc8b898 }), // cream walls
+      new THREE.MeshPhongMaterial({ color: 0xb0a080 }), // clay walls
+    ]
+    const roofMat = new THREE.MeshPhongMaterial({ color: 0x8B2500 }) // terracotta
+
+    for (let b = 0; b < numBuildings; b++) {
+      const bAngle = -0.8 + (b / numBuildings) * 1.6  // spread along dock side
+      const bDist = islandSize * 0.35 + Math.random() * islandSize * 0.15
+      const bx = Math.cos(bAngle) * bDist
+      const bz = Math.sin(bAngle) * bDist
+      const bScale = 0.7 + Math.random() * 0.6
+
+      // Walls
+      const wallW = 3 * bScale + Math.random() * 2
+      const wallH = 3 * bScale + Math.random() * 1.5
+      const wallD = 3 * bScale + Math.random() * 2
+      const wallGeom = new THREE.BoxGeometry(wallW, wallH, wallD)
+      const wall = new THREE.Mesh(wallGeom, buildingMats[b % buildingMats.length])
+      wall.position.set(bx, islandHeight / 2 + wallH / 2 - 0.5, bz)
+      wall.rotation.y = bAngle + Math.random() * 0.3
+      islandGroup.add(wall)
+
+      // Roof (pyramid)
+      const roofGeom = new THREE.ConeGeometry(Math.max(wallW, wallD) * 0.8, wallH * 0.5, 4)
+      const roof = new THREE.Mesh(roofGeom, roofMat)
+      roof.position.set(bx, islandHeight / 2 + wallH + wallH * 0.2, bz)
+      roof.rotation.y = Math.PI / 4 + bAngle
+      islandGroup.add(roof)
+    }
   }
 
   islandGroup.position.set(x, 0, z)

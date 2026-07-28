@@ -52,6 +52,7 @@ export function PiratesGame() {
   const containerRef = useRef(null)
   const canvasRef = useRef(null)
   const windOverlayRef = useRef(null)
+  const minimapCanvasRef = useRef(null)
   const actionsRef = useRef({
     startGame: () => {},
     buyUpgrade: (_type) => {},
@@ -773,15 +774,33 @@ function spawnChunk(cx, cz) {
     worldObjects.islands.push(buildIsland(scene, ix, iz))
   }
 
-  // Spawn rocks (3-6 per chunk) - away from borders
-  const numRocks = 3 + Math.floor(Math.random() * 4)
-  for (let i = 0; i < numRocks; i++) {
-    const angle = Math.random() * Math.PI * 2
-    const maxDist = (CHUNK_SIZE / 2) - 25
-    const dist = 15 + Math.random() * maxDist
-    const rx = worldX + Math.cos(angle) * dist
-    const rz = worldZ + Math.sin(angle) * dist
-    worldObjects.rocks.push(buildRock(scene, rx, rz))
+  // Spawn rocks (rare, 35% chance per chunk) - strictly away from islands & borders
+  if (Math.random() < 0.35 && worldObjects.rocks.length < MAX_ROCKS) {
+    let rx, rz, validRock = false
+    let attempts = 0
+    do {
+      const angle = Math.random() * Math.PI * 2
+      const maxDist = (CHUNK_SIZE / 2) - 35
+      const dist = 25 + Math.random() * maxDist
+      rx = worldX + Math.cos(angle) * dist
+      rz = worldZ + Math.sin(angle) * dist
+
+      validRock = true
+      // Check against all islands to prevent clipping
+      for (const island of worldObjects.islands) {
+        const dx = rx - island.x
+        const dz = rz - island.z
+        if (Math.sqrt(dx * dx + dz * dz) < island.radius + 50) {
+          validRock = false
+          break
+        }
+      }
+      attempts++
+    } while (!validRock && attempts < 10)
+
+    if (validRock) {
+      worldObjects.rocks.push(buildRock(scene, rx, rz))
+    }
   }
 
   // Ship tracking for this chunk (used by both live ships and sunken ships)
@@ -1583,26 +1602,31 @@ function createAnchor() {
 // === HARBOUR SYSTEM ===
 
 function checkHarbourEntry() {
-  if (!anchorDropped) return
-  if (harbourShopDismissed) return
-
   for (const island of worldObjects.islands) {
-    if (!island.mesh.userData.hasHarbor) continue
-    const dockEndX = island.mesh.userData.dockEndX
-    // Dock extends along +X from island center
-    const dx = playerPos.value.x - (island.x + dockEndX)
-    const dz = playerPos.value.z - island.z
+    if (!island.mesh || !island.mesh.userData.hasHarbor) continue
+    const dockWorldX = island.userData && island.userData.dockWorldX !== undefined
+      ? island.userData.dockWorldX
+      : (island.x + (island.mesh.userData.dockEndX || 0))
+    const dockWorldZ = island.userData && island.userData.dockWorldZ !== undefined
+      ? island.userData.dockWorldZ
+      : island.z
+    const dx = playerPos.value.x - dockWorldX
+    const dz = playerPos.value.z - dockWorldZ
     const dist = Math.sqrt(dx * dx + dz * dz)
 
-    if (dist < HARBOUR_RANGE) {
-      shopOpen.value = true
-      harbourShopDismissed = false
-      shopMessage.value = ''
-      mouseDeltaX = 0
-      turnAccumulator = 0
-      releasePointerLock()
-      showMessage('Welcome to port', 3000)
-      return
+    if (dist < HARBOUR_RANGE * 1.6) {
+      if (!anchorDropped && !shopOpen.value && !harbourShopDismissed) {
+        showMessage('⚓ PORT DOCK NEARBY — Press A to drop anchor & enter Port Shop', 1500)
+      } else if (anchorDropped && !harbourShopDismissed) {
+        shopOpen.value = true
+        harbourShopDismissed = false
+        shopMessage.value = ''
+        mouseDeltaX = 0
+        turnAccumulator = 0
+        releasePointerLock()
+        showMessage('Welcome to Port', 3000)
+        return
+      }
     }
   }
 }
@@ -2011,13 +2035,137 @@ function updateFireEffects(dt) {
   }
 }
 
+function updateMinimap() {
+  const canvas = minimapCanvasRef.current
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  ctx.clearRect(0, 0, 180, 180)
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(90, 90, 85, 0, Math.PI * 2)
+  ctx.clip()
+
+  ctx.fillStyle = '#0a2336'
+  ctx.fillRect(0, 0, 180, 180)
+
+  ctx.strokeStyle = 'rgba(255, 215, 0, 0.15)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.arc(90, 90, 30, 0, Math.PI * 2)
+  ctx.arc(90, 90, 60, 0, Math.PI * 2)
+  ctx.stroke()
+
+  const px = playerPos.value.x
+  const pz = playerPos.value.z
+  const scale = 0.28
+
+  function worldToMap(wx, wz) {
+    const dx = (wx - px) * scale
+    const dz = (wz - pz) * scale
+    return { x: 90 + dx, y: 90 + dz }
+  }
+
+  worldObjects.islands.forEach(island => {
+    const pos = worldToMap(island.x, island.z)
+    const r = Math.max(4, island.radius * scale)
+    if (pos.x + r >= 0 && pos.x - r <= 180 && pos.y + r >= 0 && pos.y - r <= 180) {
+      ctx.fillStyle = '#d4be8d'
+      ctx.beginPath()
+      ctx.arc(pos.x, pos.y, r + 1.5, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.fillStyle = '#3a6645'
+      ctx.beginPath()
+      ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2)
+      ctx.fill()
+
+      if (island.mesh && island.mesh.userData && island.mesh.userData.hasHarbor) {
+        const dockX = island.userData && island.userData.dockWorldX !== undefined ? island.userData.dockWorldX : (island.x + (island.mesh.userData.dockEndX || 0))
+        const dockZ = island.userData && island.userData.dockWorldZ !== undefined ? island.userData.dockWorldZ : island.z
+        const dPos = worldToMap(dockX, dockZ)
+        ctx.fillStyle = '#00ff88'
+        ctx.beginPath()
+        ctx.arc(dPos.x, dPos.y, 4, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+    }
+  })
+
+  worldObjects.rocks.forEach(rock => {
+    const pos = worldToMap(rock.x, rock.z)
+    const r = Math.max(2, rock.radius * scale)
+    ctx.fillStyle = '#555555'
+    ctx.beginPath()
+    ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2)
+    ctx.fill()
+  })
+
+  if (worldObjects.ships) {
+    worldObjects.ships.forEach(ship => {
+      if (!ship.isLooted) {
+        const pos = worldToMap(ship.x, ship.z)
+        ctx.fillStyle = '#ffd700'
+        ctx.beginPath()
+        ctx.arc(pos.x, pos.y, 3.5, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = '#ff8c00'
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+    })
+  }
+
+  (enemyShips.value || []).forEach(enemy => {
+    if (enemy && enemy.alive && enemy.mesh && enemy.mesh.position) {
+      const pos = worldToMap(enemy.mesh.position.x, enemy.mesh.position.z)
+      ctx.fillStyle = '#ff3333'
+      ctx.beginPath()
+      ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  })
+
+  const pAngle = typeof playerAngle !== 'undefined' ? playerAngle : (playerShip ? playerShip.rotation.y : 0)
+  ctx.save()
+  ctx.translate(90, 90)
+  ctx.rotate(-pAngle)
+  ctx.fillStyle = '#ffffff'
+  ctx.beginPath()
+  ctx.moveTo(0, -7)
+  ctx.lineTo(4, 5)
+  ctx.lineTo(0, 3)
+  ctx.lineTo(-4, 5)
+  ctx.closePath()
+  ctx.fill()
+  ctx.restore()
+
+  ctx.restore()
+
+  ctx.strokeStyle = '#b8860b'
+  ctx.lineWidth = 4
+  ctx.beginPath()
+  ctx.arc(90, 90, 87, 0, Math.PI * 2)
+  ctx.stroke()
+
+  ctx.fillStyle = '#ffd700'
+  ctx.font = 'bold 9px monospace'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('N', 90, 12)
+  ctx.fillText('S', 90, 168)
+  ctx.fillText('E', 168, 90)
+  ctx.fillText('W', 12, 90)
+}
+
 function update(dt) {
-  // Gradual per-frame disposal - prevents lag spikes from bulk cleanup
   processDisposalQueue()
 
-  // GPU ocean animation — runs every frame regardless of game state so waves
-  // are always visible.  Uses a local accumulator instead of Date.now() to
-  // stay within float32 precision on the GPU.
   oceanTime += dt
   if (oceanMesh) {
     updateOcean(oceanMesh, oceanTime, playerPos.value.x, playerPos.value.z, windAngle, windSpeed.value)
@@ -2025,7 +2173,34 @@ function update(dt) {
   if (sprayPool) updateSpray(sprayPool, dt)
   if (fishMesh) updateAmbientFish(fishMesh, dt, oceanTime, playerPos.value.x, playerPos.value.z)
 
-  // Floating Docks and Harbours (Static islands array and procedural islands array)
+  updateMinimap()
+
+  // Check sunken shipwreck looting
+  if (worldObjects.ships && gameState.value === 'playing') {
+    worldObjects.ships.forEach(ship => {
+      if (!ship.isLooted && ship.mesh) {
+        const dx = playerPos.value.x - ship.x
+        const dz = playerPos.value.z - ship.z
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        if (dist < 20) {
+          ship.isLooted = true
+          const parrotBonus = 1 + (playerUpgrades.value.parrot || 0) * 0.05
+          const loot = Math.floor((ship.lootValue || 150) * parrotBonus)
+          gold.value += loot
+          score.value += loot
+          const maxHp = 100 + (playerUpgrades.value.maxHpBonus || 0) * 10
+          if (hp.value < maxHp) {
+            hp.value = Math.min(maxHp, hp.value + 15)
+          }
+          showMessage(`🏴‍☠️ Looted Sunken Shipwreck! +${loot} Gold & Supplies!`, 3500)
+
+          if (ship.mesh) scene.remove(ship.mesh)
+          if (ship.beaconMesh) scene.remove(ship.beaconMesh)
+        }
+      }
+    })
+  }
+
   const allIslands = [...islands, ...worldObjects.islands]
   allIslands.forEach(island => {
     if (island.mesh && island.mesh.userData.hasHarbor && island.mesh.userData.dock) {
@@ -2037,8 +2212,6 @@ function update(dt) {
   })
 
   if (shopOpen.value) {
-    // Pause physics when in harbour shop
-    // Check if player left harbour zone - auto-close shop
     if (!anchorDropped) {
       shopOpen.value = false
       harbourShopDismissed = false
@@ -2046,10 +2219,11 @@ function update(dt) {
       let stillInHarbour = false
       for (const island of worldObjects.islands) {
         if (!island.mesh.userData.hasHarbor) continue
-        const dockEndX = island.mesh.userData.dockEndX
-        const dx = playerPos.value.x - (island.x + dockEndX)
-        const dz = playerPos.value.z - island.z
-        if (Math.sqrt(dx * dx + dz * dz) < HARBOUR_RANGE) {
+        const dockWorldX = island.userData && island.userData.dockWorldX !== undefined ? island.userData.dockWorldX : (island.x + (island.mesh.userData.dockEndX || 0))
+        const dockWorldZ = island.userData && island.userData.dockWorldZ !== undefined ? island.userData.dockWorldZ : island.z
+        const dx = playerPos.value.x - dockWorldX
+        const dz = playerPos.value.z - dockWorldZ
+        if (Math.sqrt(dx * dx + dz * dz) < HARBOUR_RANGE * 1.6) {
           stillInHarbour = true
           break
         }
@@ -2063,10 +2237,7 @@ function update(dt) {
     return
   }
 
-  // Check harbour entry while anchored (player may drift into range)
-  if (anchorDropped) {
-    checkHarbourEntry()
-  }
+  checkHarbourEntry()
 
   if (gameState.value !== 'playing') return
 
@@ -3138,6 +3309,11 @@ function startGame() {
       </div>
       <canvas ref={canvasRef}></canvas>
       <canvas ref={windOverlayRef} className="wind-overlay-canvas"></canvas>
+      {/* Nautical Minimap Overlay */}
+      <div className="minimap-container">
+        <canvas ref={minimapCanvasRef} width={180} height={180} className="minimap-canvas"></canvas>
+        <div className="minimap-title">CARIBBEAN RADAR</div>
+      </div>
       <div className="indicators">
         {ui.enemyIndicators.map((enemy, index) => (
           <div

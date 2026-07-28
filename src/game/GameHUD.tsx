@@ -2,7 +2,7 @@
 import { forwardRef } from 'react'
 
 export const GameHUD = forwardRef(function GameHUD({ ui, actions }, ref) {
-  const { containerRef, canvasRef, windOverlayRef } = ref
+  const { containerRef, canvasRef, windOverlayRef, minimapCanvasRef } = ref
 
   return (
     <div className="game-container" ref={containerRef}>
@@ -24,6 +24,12 @@ export const GameHUD = forwardRef(function GameHUD({ ui, actions }, ref) {
       </div>
       <canvas ref={canvasRef}></canvas>
       <canvas ref={windOverlayRef} className="wind-overlay-canvas"></canvas>
+      
+      {/* Nautical Minimap Overlay */}
+      <div className="minimap-container">
+        <canvas ref={minimapCanvasRef} width={180} height={180} className="minimap-canvas"></canvas>
+        <div className="minimap-title">CARIBBEAN RADAR</div>
+      </div>
       <div className="indicators">
         {ui.enemyIndicators.map((enemy, index) => (
           <div

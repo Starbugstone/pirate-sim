@@ -64,8 +64,8 @@ interface ShipTrail {
   lastEmitTime: number
 }
 
-const MAX_TRAIL_POINTS = 30
-const MAX_TRAIL_AGE = 1.8 // seconds trail expands and fades behind vessel
+const MAX_TRAIL_POINTS = 48
+const MAX_TRAIL_AGE = 2.4 // seconds trail expands and fades behind vessel
 
 const wakeShaderMaterial = new THREE.ShaderMaterial({
   vertexShader: `
@@ -111,10 +111,11 @@ const wakeShaderMaterial = new THREE.ShaderMaterial({
       vec2 p = vWorldPos.xz * 0.4 + vec2(uTime * 0.12, -uTime * 0.08);
       float foamTex = noise(p * 3.0);
 
-      float foam = smoothstep(0.30, 0.70, foamTex + edgeFade * 0.25) * edgeFade * ageFade;
+      float brokenFoam = smoothstep(0.28, 0.68, foamTex + edgeFade * 0.30);
+      float foam = (0.28 + brokenFoam * 0.72) * edgeFade * ageFade;
 
-      vec3 wakeColor = mix(vec3(0.90, 0.98, 1.0), vec3(0.20, 0.70, 0.85), vAge);
-      gl_FragColor = vec4(wakeColor, foam * 0.40 * ageFade);
+      vec3 wakeColor = mix(vec3(0.97, 1.0, 1.0), vec3(0.48, 0.82, 0.90), vAge);
+      gl_FragColor = vec4(wakeColor, foam * 0.86 * ageFade);
     }
   `,
   uniforms: {
@@ -171,7 +172,9 @@ export function emitShipWake(
 
   const now = performance.now() * 0.001
   if (now - trail.lastEmitTime > 0.05) {
-    const sternOffset = initialWidth * 0.8
+    // Width scales with hull size in the callers, so it is also a reliable
+    // approximation of the stern distance. This keeps foam behind the transom.
+    const sternOffset = initialWidth * 3.75
     const sternX = x - Math.sin(heading) * sternOffset
     const sternZ = z - Math.cos(heading) * sternOffset
 
@@ -244,7 +247,7 @@ export function updateShipWakes(
       const normAge = Math.min(1.0, p.age / MAX_TRAIL_AGE)
 
       // V-shaped wake widening over time
-      const currentWidth = p.initialWidth + p.age * (0.35 + p.speed * 0.04)
+      const currentWidth = p.initialWidth + p.age * (0.55 + p.speed * 0.075)
 
       // Perpendicular vector to ship heading
       const perpX = Math.cos(p.heading) * currentWidth * 0.5
@@ -290,7 +293,7 @@ export function updateShipWakes(
       ageAttr.updateRange.offset = 0
       ageAttr.updateRange.count = ageIdx
     }
-    trail.geometry.setDrawRange(0, trail.points.length * 2)
+    trail.geometry.setDrawRange(0, Math.max(0, (trail.points.length - 1) * 6))
   })
 }
 
@@ -318,6 +321,15 @@ export function spawnWakeParticle(
 
 export function updateWakeParticles(scene: THREE.Scene, _wakeArray: any, dt: number, time = 0, windAngle = 0, windStrength = 3) {
   updateShipWakes(scene, dt, time, windAngle, windStrength)
+}
+
+export function clearShipWakes(scene: THREE.Scene) {
+  shipTrails.forEach((trail) => {
+    scene.remove(trail.mesh)
+    trail.geometry.dispose()
+    ;(trail.mesh.material as THREE.Material).dispose()
+  })
+  shipTrails.clear()
 }
 
 export function createCannonMuzzleFlash(scene: THREE.Scene, x: number, y: number, z: number, angle: number) {

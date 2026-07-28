@@ -4,46 +4,24 @@ import { OCEAN_SIZE } from './constants'
 
 // ─── 1. Optimized Trochoidal Gerstner Waves for 60 FPS ───
 export const WAVES = [
-  [ 0.7071,  0.7071, 0.035, 1.25, 1.80, 0.65], // Primary Swell (1.8m)
-  [-0.8660,  0.5000, 0.065, 1.50, 0.90, 0.55], // Cross Chop (0.9m)
-  [ 0.3420, -0.9397, 0.120, 2.00, 0.40, 0.45]  // Surface Ripples (0.4m)
+  // direction X/Z, wave number, angular speed, amplitude, steepness.
+  // The angular speeds approximate deep-water dispersion (omega = sqrt(g*k)).
+  [ 0.8192,  0.5736, 0.052, 0.714, 1.45, 0.42], // long ocean swell
+  [ 0.9659, -0.2588, 0.089, 0.934, 0.72, 0.36], // crossing swell
+  [-0.4226,  0.9063, 0.145, 1.193, 0.34, 0.28], // wind wave
+  [ 0.2588,  0.9659, 0.230, 1.502, 0.15, 0.18]  // short chop
 ] as const
 
-// ─── Procedural Seamless Normal Map Texture Generator ───
-let cachedNormalMap: THREE.CanvasTexture | null = null
+// ─── Tiled high-frequency normal detail ───
+let cachedNormalMap: THREE.Texture | null = null
 
-function getWaterNormalMap(): THREE.CanvasTexture {
+function getWaterNormalMap(): THREE.Texture {
   if (cachedNormalMap) return cachedNormalMap
-
-  const size = 256
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')!
-  const imgData = ctx.createImageData(size, size)
-  const data = imgData.data
-
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const idx = (y * size + x) * 4
-      const u = (x / size) * Math.PI * 4
-      const v = (y / size) * Math.PI * 4
-
-      const dx = Math.cos(u * 2.0 + v) * 0.4 + Math.sin(u * 4.0 - v * 2.0) * 0.2
-      const dy = Math.sin(v * 2.0 + u) * 0.4 + Math.cos(v * 4.0 - u * 2.0) * 0.2
-      const dz = 1.0
-
-      const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
-      data[idx]     = Math.floor(((dx / len) * 0.5 + 0.5) * 255)
-      data[idx + 1] = Math.floor(((dy / len) * 0.5 + 0.5) * 255)
-      data[idx + 2] = Math.floor(((dz / len) * 0.5 + 0.5) * 255)
-      data[idx + 3] = 255
-    }
-  }
-  ctx.putImageData(imgData, 0, 0)
-  cachedNormalMap = new THREE.CanvasTexture(canvas)
+  cachedNormalMap = new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}waternormals.jpg`)
   cachedNormalMap.wrapS = THREE.RepeatWrapping
   cachedNormalMap.wrapT = THREE.RepeatWrapping
+  cachedNormalMap.minFilter = THREE.LinearMipmapLinearFilter
+  cachedNormalMap.magFilter = THREE.LinearFilter
   return cachedNormalMap
 }
 
@@ -126,12 +104,15 @@ const fragmentShader = `
     vec3 V = normalize(cameraPosition - vWorldPosition);
     vec3 sunDir = normalize(vec3(0.40, 0.70, 0.50));
 
-    // Semi-Transparent Caribbean Water Palette
-    vec3 deepNavy      = vec3(0.01, 0.15, 0.32); // Deep blue sea
-    vec3 shallowTurq   = vec3(0.02, 0.55, 0.68); // Tropical shallow cyan
+    // Caribbean water: darker troughs, translucent turquoise faces and pale crests.
+    vec3 deepNavy      = vec3(0.008, 0.075, 0.16);
+    vec3 shallowTurq   = vec3(0.015, 0.39, 0.50);
+    vec3 crestColor    = vec3(0.32, 0.72, 0.76);
 
     float hFactor = smoothstep(-1.5, 1.5, vElevation);
-    vec3 waterColor = mix(deepNavy, shallowTurq, hFactor * 0.5 + 0.25);
+    vec3 waterColor = mix(deepNavy, shallowTurq, hFactor * 0.58 + 0.18);
+    float crest = smoothstep(0.72, 1.48, vElevation) * smoothstep(0.015, 0.10, 1.0 - N.y);
+    waterColor = mix(waterColor, crestColor, crest * 0.34);
 
     // Directional wave lighting
     float NdotL = max(dot(N, sunDir), 0.0);
@@ -140,18 +121,20 @@ const fragmentShader = `
     // Sun specular sparkle
     vec3 H = normalize(sunDir + V);
     float NdotH = max(dot(N, H), 0.0);
-    float spec = pow(NdotH, 128.0) * 1.4;
+    float spec = pow(NdotH, 180.0) * 0.92 + pow(NdotH, 34.0) * 0.075;
     vec3 sunGlint = vec3(1.0, 0.96, 0.84) * spec;
 
     // Fresnel sky reflection
     float NdotV = max(dot(N, V), 0.0);
     float fresnel = pow(1.0 - NdotV, 3.5);
-    vec3 skyReflect = vec3(0.20, 0.55, 0.80);
+    vec3 skyReflect = vec3(0.16, 0.48, 0.72);
 
-    vec3 col = mix(waterColor, skyReflect, fresnel * 0.30) + sunGlint;
+    vec3 col = mix(waterColor, skyReflect, fresnel * 0.48) + sunGlint;
 
     // Semi-transparent water alpha: allows seabed & island shorelines to show through cleanly
-    float alpha = mix(0.80, 0.90, fresnel * 0.4);
+    // Clear Caribbean water: transparent face-on, denser at grazing angles and crests.
+    // This restores underwater fish/coral visibility without making reflections vanish.
+    float alpha = clamp(mix(0.80, 0.94, fresnel) + crest * 0.025, 0.0, 0.96);
 
     gl_FragColor = vec4(col, alpha);
     #include <fog_fragment>
@@ -206,7 +189,7 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
   scene.add(deepPlane)
 
   // Semi-transparent main ocean surface mesh (optimized geometry grid for 60 FPS)
-  const geometry = new THREE.PlaneGeometry(1000, 1000, 80, 80)
+  const geometry = new THREE.PlaneGeometry(1000, 1000, 160, 160)
 
   const material = new THREE.ShaderMaterial({
     vertexShader,
@@ -310,78 +293,111 @@ export function getOceanHeight(
 }
 
 // ────────────────────────── Bow & Stern Spray System ──────────────────────────
-const SPRAY_POOL_SIZE = 40
+const SPRAY_POOL_SIZE = 72
 
 export function createSprayPool(scene: THREE.Scene) {
-  const sprites: THREE.Mesh[] = []
-  const geom = new THREE.SphereGeometry(0.25, 6, 6)
-  const mat  = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 })
-
-  for (let i = 0; i < SPRAY_POOL_SIZE; i++) {
-    const m = new THREE.Mesh(geom, mat)
-    m.visible = false
-    scene.add(m)
-    sprites.push(m)
-  }
+  const positions = new Float32Array(SPRAY_POOL_SIZE * 3)
+  const alphas = new Float32Array(SPRAY_POOL_SIZE)
+  const sizes = new Float32Array(SPRAY_POOL_SIZE)
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1))
+  geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1))
+  const material = new THREE.ShaderMaterial({
+    vertexShader: `
+      attribute float aAlpha;
+      attribute float aSize;
+      varying float vAlpha;
+      void main() {
+        vAlpha = aAlpha;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aSize * (180.0 / max(1.0, -mv.z));
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: `
+      varying float vAlpha;
+      void main() {
+        vec2 p = gl_PointCoord - 0.5;
+        float soft = 1.0 - smoothstep(0.02, 0.25, dot(p, p));
+        gl_FragColor = vec4(0.88, 0.97, 1.0, vAlpha * soft);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.NormalBlending
+  })
+  const points = new THREE.Points(geometry, material)
+  points.frustumCulled = false
+  points.renderOrder = 3
+  scene.add(points)
   return {
-    sprites,
-    data: sprites.map(() => ({ active: false, vx: 0, vy: 0, vz: 0, life: 0, maxLife: 0.6 }))
+    points,
+    positions,
+    alphas,
+    sizes,
+    data: Array.from({ length: SPRAY_POOL_SIZE }, () => ({ active: false, vx: 0, vy: 0, vz: 0, life: 0, maxLife: 0.6 }))
   }
 }
 
 export function emitSpray(
   pool: ReturnType<typeof createSprayPool>,
-  x: number, z: number, angle: number, speed: number, count: number
+  x: number, z: number, angle: number, speed: number, count: number, surfaceY = 0
 ) {
   let spawned = 0
   for (let i = 0; i < pool.data.length && spawned < count; i++) {
     if (pool.data[i].active) continue
-    const d = pool.data[i], s = pool.sprites[i]
+    const d = pool.data[i]
 
-    const spread = (Math.random() - 0.5) * 1.5
+    const spread = (Math.random() - 0.5) * 0.7
     const side = Math.random() > 0.5 ? 1 : -1
-    const sprayAngle = angle + side * (Math.PI * 0.4 + spread * 0.3)
+    // Spray is thrown outward and aft from the stern, never projected through the hull.
+    const sprayAngle = angle + Math.PI + side * (0.38 + spread)
 
-    d.vx   = Math.sin(sprayAngle) * (speed * 0.25 + Math.random() * 2.5)
-    d.vy   = 2.5 + Math.random() * 4.0
-    d.vz   = Math.cos(sprayAngle) * (speed * 0.25 + Math.random() * 2.5)
-    d.maxLife = 0.4 + Math.random() * 0.5
+    d.vx   = Math.sin(sprayAngle) * (speed * 0.16 + 0.8 + Math.random() * 1.6)
+    d.vy   = 1.2 + Math.random() * 2.7
+    d.vz   = Math.cos(sprayAngle) * (speed * 0.16 + 0.8 + Math.random() * 1.6)
+    d.maxLife = 0.35 + Math.random() * 0.55
     d.life = d.maxLife
     d.active = true
 
-    const bowDist = 3.5
-    s.position.set(
-      x + Math.sin(angle) * bowDist + (Math.random() - 0.5) * 1.5,
-      0.6,
-      z + Math.cos(angle) * bowDist + (Math.random() - 0.5) * 1.5
-    )
-    s.visible = true;
-    (s.material as THREE.MeshBasicMaterial).opacity = 0.80
-    s.scale.setScalar(0.7 + Math.random() * 0.9)
+    const sternDist = 6.6
+    const offset = i * 3
+    pool.positions[offset] = x - Math.sin(angle) * sternDist + Math.cos(angle) * side * (1.1 + Math.random() * 1.4)
+    pool.positions[offset + 1] = surfaceY + 0.18 + Math.random() * 0.35
+    pool.positions[offset + 2] = z - Math.cos(angle) * sternDist - Math.sin(angle) * side * (1.1 + Math.random() * 1.4)
+    pool.alphas[i] = 0.72
+    pool.sizes[i] = 0.65 + Math.random() * 0.9
     spawned++
   }
+  pool.points.geometry.attributes.position.needsUpdate = true
+  pool.points.geometry.attributes.aAlpha.needsUpdate = true
+  pool.points.geometry.attributes.aSize.needsUpdate = true
 }
 
 export function updateSpray(pool: ReturnType<typeof createSprayPool>, dt: number) {
   for (let i = 0; i < pool.data.length; i++) {
     const d = pool.data[i]
     if (!d.active) continue
-    const s = pool.sprites[i]
+    const offset = i * 3
 
     d.life -= dt
     d.vy   -= 11.0 * dt
-    s.position.x += d.vx * dt
-    s.position.y += d.vy * dt
-    s.position.z += d.vz * dt
+    pool.positions[offset] += d.vx * dt
+    pool.positions[offset + 1] += d.vy * dt
+    pool.positions[offset + 2] += d.vz * dt
 
-    const fade = Math.max(0, d.life / d.maxLife);
-    (s.material as THREE.MeshBasicMaterial).opacity = fade * 0.75
-    s.scale.multiplyScalar(1 + dt * 0.8)
+    const fade = Math.max(0, d.life / d.maxLife)
+    pool.alphas[i] = fade * 0.72
+    pool.sizes[i] += dt * 0.9
 
-    if (d.life <= 0 || s.position.y < -0.5) {
+    if (d.life <= 0 || pool.positions[offset + 1] < -0.5) {
       d.active = false
-      s.visible = false
+      pool.alphas[i] = 0
     }
   }
+  pool.points.geometry.attributes.position.needsUpdate = true
+  pool.points.geometry.attributes.aAlpha.needsUpdate = true
+  pool.points.geometry.attributes.aSize.needsUpdate = true
 }
-

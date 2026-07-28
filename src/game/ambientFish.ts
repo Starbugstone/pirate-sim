@@ -46,6 +46,7 @@ interface School {
 }
 
 let schools: School[] = []
+const fishTransform = new THREE.Object3D()
 
 function randomBetween(a: number, b: number) {
   return a + Math.random() * (b - a)
@@ -145,7 +146,7 @@ export function createAmbientFish(scene: THREE.Scene) {
   const instancedMesh = new THREE.InstancedMesh(geom, mat, TOTAL_FISH)
   instancedMesh.frustumCulled = false
 
-  const dummy = new THREE.Object3D()
+  const dummy = fishTransform
   dummy.scale.set(0, 0, 0)
   dummy.updateMatrix()
   for (let i = 0; i < TOTAL_FISH; i++) {
@@ -170,7 +171,7 @@ export function updateAmbientFish(
     schools.push(spawnSchool(playerX, playerZ))
   }
 
-  const dummy = new THREE.Object3D()
+  const dummy = fishTransform
   let instanceIdx = 0
 
   for (let si = 0; si < schools.length; si++) {

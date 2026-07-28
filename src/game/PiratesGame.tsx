@@ -3,18 +3,19 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import './pirates.css'
 import {
-  SHIP_TYPES, MAX_TREASURES, MAX_CANNONBALLS, MAX_ISLANDS, MAX_ROCKS,
+  SHIP_TYPES, MAX_TREASURES, MAX_CANNONBALLS, MAX_ACTIVE_ENEMIES, MAX_ISLANDS, MAX_ROCKS,
   MAX_DISPOSE_PER_FRAME, MAX_WIND_PARTICLES, CHUNK_SIZE, HARBOUR_RANGE,
   ICON_RENDER_DIST, INACTIVE_DIST, ACTIVE_DIST, KRAKEN_INACTIVE_DIST,
   KRAKEN_RENDER_DIST, CANNONBALL_CULL_DIST, ENEMY_IDLE_DIST,
   ENEMY_ALERT_DIST, ENEMY_ATTACK_DIST
 } from './constants'
 import { normalizeAngle, shortestAngleDelta } from './helpers'
-import { createOcean, updateOcean, setOceanIslands, getOceanHeight, getGerstnerDisplacement, createSprayPool, emitSpray, updateSpray } from './ocean'
+import { createOcean, updateOcean, setOceanIslands, getOceanHeight, createSprayPool, emitSpray, updateSpray } from './ocean'
 import { createPlayerShip as buildPlayerShip, createEnemyShipMesh, updateShipBuoyancy } from './ships'
 import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
-import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, createCannonMuzzleFlash, updateMuzzleFlashes } from './effects'
+import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, clearShipWakes, createCannonMuzzleFlash, updateMuzzleFlashes } from './effects'
 import { createAmbientFish, updateAmbientFish } from './ambientFish'
+import { updateShorelineFoamTime } from './terrain'
 const makeRef = (value) => ({ value })
 const computed = (getter) => ({
   get value() {
@@ -147,6 +148,11 @@ let fireEffectsFrameCounter = 0
 let indicatorsFrameCounter = 0
 let windParticleFrameCounter = 0
 let lastCleanupTime = 0
+let minimapUpdateAccumulator = 0
+let windUpdateAccumulator = 0
+let fishUpdateAccumulator = 0
+let sailUpdateAccumulator = 0
+let lastFrameTime = performance.now()
 
 // Computed for HUD
 const aliveEnemies = computed(() => enemyShips.value.filter(e => e.hp > 0).length)
@@ -253,7 +259,7 @@ function disposeGroup(group) {
 function resizeWindOverlay() {
   if (!windOverlay.value) return
 
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5)
   windOverlay.value.width = Math.floor(window.innerWidth * pixelRatio)
   windOverlay.value.height = Math.floor(window.innerHeight * pixelRatio)
   windOverlay.value.style.width = `${window.innerWidth}px`
@@ -363,6 +369,7 @@ function updateWindParticles(dt) {
 
   ctx.clearRect(0, 0, width, height)
   ctx.globalCompositeOperation = 'lighter'
+  ctx.strokeStyle = 'rgb(230, 247, 252)'
 
   for (const particle of windParticles) {
     if (!particle || !Number.isFinite(particle.x) || !Number.isFinite(particle.y) || !Number.isFinite(particle.z)) {
@@ -428,18 +435,15 @@ function updateWindParticles(dt) {
     const tailY = (-windTailProjection.y * 0.5 + 0.5) * height
 
     const depthFade = Math.max(0.2, 1 - Math.max(0, windHeadProjection.z) * 0.55)
-    const gradient = ctx.createLinearGradient(tailX, tailY, screenX, screenY)
-    gradient.addColorStop(0, 'rgba(210, 235, 245, 0)')
-    gradient.addColorStop(0.35, `rgba(220, 242, 248, ${(alpha * 0.62 * depthFade).toFixed(3)})`)
-    gradient.addColorStop(1, `rgba(248, 253, 255, ${(alpha * 1.18 * depthFade).toFixed(3)})`)
-
-    ctx.strokeStyle = gradient
+    ctx.globalAlpha = alpha * depthFade
     ctx.lineWidth = particle.width * (1.55 - Math.max(-0.4, windHeadProjection.z + 0.2) * 0.45)
     ctx.beginPath()
     ctx.moveTo(tailX, tailY)
     ctx.lineTo(screenX, screenY)
     ctx.stroke()
   }
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
 }
 
 // Queue something for gradual disposal (avoids synchronous spikes)
@@ -471,7 +475,7 @@ function init() {
   camera.lookAt(0, 0, 0)
   renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: false, powerPreference: 'high-performance' })
   renderer.setSize(window.innerWidth, window.innerHeight)
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
   scene.add(ambientLight)
   const sunLight = new THREE.DirectionalLight(0xffffcc, 1)
@@ -691,9 +695,6 @@ function checkProceduralSpawns() {
     }
   }
 
-  // Cleanup distant chunks (beyond 9x9)
-  cleanupDistantChunks()
-
   // Ensure kraken is always in loaded chunk
   if (krakenActive && kraken.value) {
     // Check if kraken is in loaded chunk
@@ -779,7 +780,11 @@ function spawnChunk(cx, cz) {
     const dist = 25 + Math.random() * maxDist
     const ix = worldX + Math.cos(angle) * dist
     const iz = worldZ + Math.sin(angle) * dist
-    worldObjects.islands.push(buildIsland(scene, ix, iz))
+    const pdx = ix - playerPos.value.x
+    const pdz = iz - playerPos.value.z
+    if (pdx * pdx + pdz * pdz > 120 * 120) {
+      worldObjects.islands.push(buildIsland(scene, ix, iz))
+    }
   }
 
   // Spawn rocks (rare, 35% chance per chunk) - strictly away from islands & borders
@@ -794,6 +799,11 @@ function spawnChunk(cx, cz) {
       rz = worldZ + Math.sin(angle) * dist
 
       validRock = true
+      const playerDx = rx - playerPos.value.x
+      const playerDz = rz - playerPos.value.z
+      if (playerDx * playerDx + playerDz * playerDz < 75 * 75) {
+        validRock = false
+      }
       // Check against all islands to prevent clipping
       for (const island of worldObjects.islands) {
         const dx = rx - island.x
@@ -815,10 +825,10 @@ function spawnChunk(cx, cz) {
   const chunkShips = []
 
   // Spawn random ships (0-3 ships per chunk) - skip starting chunk
-  if (!isStartingChunk) {
+  if (!isStartingChunk && enemyShips.value.length < MAX_ACTIVE_ENEMIES) {
     const numShips = Math.random() < 0.3 ? 1 : 0 // 30% chance of 1 ship per chunk
 
-    for (let s = 0; s < numShips; s++) {
+    for (let s = 0; s < numShips && enemyShips.value.length < MAX_ACTIVE_ENEMIES; s++) {
       // Try to find a valid position (away from borders and other ships)
       let sx, sz, valid
       let attempts = 0
@@ -840,6 +850,13 @@ function spawnChunk(cx, cz) {
             valid = false
             break
           }
+        }
+
+        // Keep the opening waters navigable and avoid spawning combat on camera.
+        const playerDx = sx - playerPos.value.x
+        const playerDz = sz - playerPos.value.z
+        if (playerDx * playerDx + playerDz * playerDz < 90 * 90) {
+          valid = false
         }
 
         // Check distance from existing enemies (avoid spawning on top)
@@ -1004,33 +1021,6 @@ function cleanupDistantChunks() {
     if (Math.sqrt(dx*dx + dz*dz) > maxDist || worldObjects.rocks.length > MAX_ROCKS) {
       queueForDisposal(rock.mesh)
       worldObjects.rocks.splice(i, 1)
-    }
-  }
-
-  // Clean ships queue mesh for gradual disposal
-  if (worldObjects.ships) {
-    for (let i = worldObjects.ships.length - 1; i >= 0; i--) {
-      const ship = worldObjects.ships[i]
-      const dx = ship.x - px
-      const dz = ship.z - pz
-      if (Math.sqrt(dx*dx + dz*dz) > maxDist) {
-        queueForDisposal(ship.mesh)
-        worldObjects.ships.splice(i, 1)
-      }
-    }
-  }
-
-  // Clean permanent distant treasures
-  for (let i = treasures.value.length - 1; i >= 0; i--) {
-    const t = treasures.value[i]
-    if (t.permanent) {
-      const dx = t.x - px
-      const dz = t.z - pz
-      if (Math.sqrt(dx*dx + dz*dz) > maxDist) {
-        if (t.mesh) queueForDisposal(t.mesh)
-        if (t.ringMesh) queueForDisposal(t.ringMesh)
-        treasures.value.splice(i, 1)
-      }
     }
   }
 
@@ -2208,8 +2198,8 @@ function updateMinimap() {
   }
 
   (enemyShips.value || []).forEach(enemy => {
-    if (enemy && enemy.alive && enemy.mesh && enemy.mesh.position) {
-      const pos = worldToMap(enemy.mesh.position.x, enemy.mesh.position.z)
+    if (enemy && enemy.hp > 0) {
+      const pos = worldToMap(enemy.x, enemy.z)
       ctx.fillStyle = '#ff3333'
       ctx.beginPath()
       ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2)
@@ -2254,26 +2244,41 @@ function update(dt) {
   processDisposalQueue()
   updateMuzzleFlashes(scene, dt)
 
-  // Dynamic Ship Roll/Heel based on crosswind force & turning inertia
-  if (playerShip) {
-    const angleDelta = shortestAngleDelta(playerAngle, windAngle)
-    const crosswindForce = Math.sin(angleDelta) * (windSpeed.value / 6)
-    const turnInertia = mouseDeltaX * 12.0
-    const targetRoll = -crosswindForce * 0.16 + turnInertia
-    playerShip.rotation.z += (targetRoll - playerShip.rotation.z) * 4.0 * dt
-  }
   if (oceanMesh) {
     updateOcean(oceanMesh, oceanTime, playerPos.value.x, playerPos.value.z, windAngle, windSpeed.value)
   }
+  updateShorelineFoamTime(oceanTime)
   if (sprayPool) updateSpray(sprayPool, dt)
-  if (fishMesh) updateAmbientFish(fishMesh, dt, oceanTime, playerPos.value.x, playerPos.value.z)
+  fishUpdateAccumulator += dt
+  if (fishMesh && fishUpdateAccumulator >= 1 / 30) {
+    updateAmbientFish(fishMesh, fishUpdateAccumulator, oceanTime, playerPos.value.x, playerPos.value.z)
+    fishUpdateAccumulator = 0
+  }
 
-  updateMinimap()
+  minimapUpdateAccumulator += dt
+  if (minimapUpdateAccumulator >= 0.15) {
+    updateMinimap()
+    minimapUpdateAccumulator = 0
+  }
 
   // Check sunken shipwreck looting
   if (worldObjects.ships && gameState.value === 'playing') {
     worldObjects.ships.forEach(ship => {
       if (!ship.isLooted && ship.mesh) {
+        updateShipBuoyancy(
+          ship.mesh,
+          ship.physicsState || (ship.physicsState = { currentY: 0, currentPitch: 0, currentRoll: 0 }),
+          ship.x,
+          ship.z,
+          ship.heading || 0,
+          0,
+          0,
+          oceanTime,
+          dt,
+          9,
+          3.5
+        )
+
         const dx = playerPos.value.x - ship.x
         const dz = playerPos.value.z - ship.z
         const dist = Math.sqrt(dx * dx + dz * dz)
@@ -2328,7 +2333,6 @@ function update(dt) {
         harbourShopDismissed = false
       }
     }
-    renderer.render(scene, camera)
     return
   }
 
@@ -2360,7 +2364,11 @@ function update(dt) {
   }
 
   // Animate sails
-  animateSails(dt)
+  sailUpdateAccumulator += dt
+  if (sailUpdateAccumulator >= 1 / 30) {
+    animateSails(sailUpdateAccumulator)
+    sailUpdateAccumulator = 0
+  }
 
   // === GRADUAL STEERING WITH MOUSE ===
   // Add mouse delta to target rotation for easing
@@ -2514,12 +2522,12 @@ function update(dt) {
     setOceanIslands(oceanMesh, [...islands, ...worldObjects.islands], [...rocks, ...worldObjects.rocks])
   }
 
-  // Emit bow spray when moving through waves at speed
+  // Emit wave-locked stern spray when water is being shed at speed.
   if (sprayPool && spd > 2.5) {
     const waveSlam = Math.max(0, -(physRes.dispBow.y - physRes.dispStern.y)) * spd * 0.03
-    const sprayChance = (spd - 2.5) * 0.04 + waveSlam
-    if (Math.random() < sprayChance) {
-      emitSpray(sprayPool, px, pz, playerAngle, spd, 1 + Math.floor(spd / 4))
+    const sprayRate = (spd - 2.5) * 2.4 + waveSlam * 60
+    if (Math.random() < Math.min(1, sprayRate * dt)) {
+      emitSpray(sprayPool, px, pz, playerAngle, spd, 1 + Math.floor(spd / 4), physRes.dispStern.y)
     }
   }
 
@@ -2728,7 +2736,7 @@ function update(dt) {
     // Update enemy mesh — multi-point hull buoyancy on waves
     mesh.userData.physicsState = mesh.userData.physicsState || { currentY: 0, currentPitch: 0, currentRoll: 0 }
     const sizeMult = shipType.size || 1.0
-    updateShipBuoyancy(
+    const enemyPhysRes = updateShipBuoyancy(
       mesh,
       mesh.userData.physicsState,
       enemy.x,
@@ -2742,23 +2750,12 @@ function update(dt) {
       5 * sizeMult
     )
 
-    // Animate enemy sails
-    if (mesh.userData.sails) {
-      const time = Date.now() * 0.001
-      mesh.userData.sails.forEach((sail, sailIndex) => {
-        if (!sail.userData.originalVertices) return
-        const positions = sail.geometry.attributes.position
-        const original = sail.userData.originalVertices
-        const windStrength = windSpeed.value / 6
-        for (let i = 0; i < positions.count; i++) {
-          const x = original[i * 3]
-          const y = original[i * 3 + 1]
-          const bulge = Math.abs(x) / 3 * windStrength
-          const wave = Math.sin(time * 2.5 + y * 0.5 + sailIndex) * 0.25 * windStrength
-          positions.array[i * 3 + 2] = bulge + wave
-        }
-        positions.needsUpdate = true
-      })
+    // Visible vessels shed a smaller stern plume into the same one-draw-call pool.
+    if (sprayPool && enemySpeed > 3 && distToPlayerSq < 180 * 180) {
+      const enemySprayRate = (enemySpeed - 3) * 0.45
+      if (Math.random() < enemySprayRate * dt) {
+        emitSpray(sprayPool, enemy.x, enemy.z, enemy.angle, enemySpeed, 1, enemyPhysRes.dispStern.y)
+      }
     }
 
     // Collision with player
@@ -3108,13 +3105,13 @@ function update(dt) {
   if (starboardCooldown.value > 0) starboardCooldown.value -= dt
 
   // === SHIP WAKE TRAIL ===
-  if (playerSpeed.value > 0.5) {
-    emitWake(scene, 'player', playerPos.value.x, playerPos.value.z, playerAngle, playerSpeed.value, 1.8)
-  }
   tickWake(scene, playerWake, dt, oceanTime, windAngle, windSpeed.value)
 
-  // Update GPU wind particles every frame via uniforms only.
-  updateWindParticles(dt)
+  windUpdateAccumulator += dt
+  if (windUpdateAccumulator >= 1 / 30) {
+    updateWindParticles(windUpdateAccumulator)
+    windUpdateAccumulator = 0
+  }
 
   // Debug wind indicators â€” update direction every frame
   if (debugWindArrow) {
@@ -3189,10 +3186,11 @@ function updateEnemyIndicators() {
   enemyIndicators.value = indicators
 }
 
-function animate() {
+function animate(now = performance.now()) {
   animationId = requestAnimationFrame(animate)
 
-  const dt = 1 / 60
+  const dt = Math.min(0.05, Math.max(1 / 240, (now - lastFrameTime) / 1000))
+  lastFrameTime = now
   frameCount++
   update(dt)
 
@@ -3200,14 +3198,6 @@ function animate() {
 }
 
 function startGame() {
-  if (oceanMesh) {
-    scene.remove(oceanMesh)
-    if (oceanMesh.userData && oceanMesh.userData.deepPlane) {
-      scene.remove(oceanMesh.userData.deepPlane)
-    }
-  }
-  oceanMesh = createOcean(scene)
-
   // Exit pointer lock if active
   if (document.pointerLockElement) {
     document.exitPointerLock()
@@ -3237,6 +3227,14 @@ function startGame() {
   playerAngle = 0
   targetRotation = 0
   playerSpeed.value = 0
+  Object.assign(playerPhysicsState, {
+    currentY: 0,
+    currentPitch: 0,
+    currentRoll: 0,
+    heaveVelocity: 0,
+    pitchVelocity: 0,
+    rollVelocity: 0
+  })
   windVisualAngle = windAngle
   windVisualSpeed = windSpeed.value
 
@@ -3267,6 +3265,11 @@ function startGame() {
   indicatorsFrameCounter = 0
   windParticleFrameCounter = 0
   lastCleanupTime = 0
+  minimapUpdateAccumulator = 0
+  windUpdateAccumulator = 0
+  fishUpdateAccumulator = 0
+  sailUpdateAccumulator = 0
+  lastFrameTime = performance.now()
 
   // Clear fire effects
   if (playerFire.value) {
@@ -3314,6 +3317,7 @@ function startGame() {
   // Clear wake particles - dispose properly
   playerWake.forEach(w => { if (w && w.mesh) disposeMesh(w.mesh) })
   playerWake = []
+  clearShipWakes(scene)
 
   victory.value = false
   gameState.value = 'playing'
@@ -3381,6 +3385,8 @@ function startGame() {
       if (windParticleContext) {
         windParticleContext.clearRect(0, 0, window.innerWidth, window.innerHeight)
       }
+      if (scene) clearShipWakes(scene)
+      if (renderer) renderer.dispose()
     }
   }, [])
   return (
@@ -3398,7 +3404,7 @@ function startGame() {
         <div className="hud-right">
           <div className="stat">Port: {ui.portCooldown > 0 ? `${ui.portCooldown.toFixed(1)}s` : 'READY'}</div>
           <div className="stat">Stbd: {ui.starboardCooldown > 0 ? `${ui.starboardCooldown.toFixed(1)}s` : 'READY'}</div>
-          <div className="stat">Enemies: {ui.aliveEnemies} / 3 | Kraken: {ui.krakenHp > 0 ? 'ACTIVE' : (ui.aliveEnemies === 0 ? 'NEXT' : '---')}</div>
+          <div className="stat">Enemies: {ui.aliveEnemies} | Kraken: {ui.krakenHp > 0 ? 'ACTIVE' : (ui.aliveEnemies === 0 ? 'NEXT' : '---')}</div>
         </div>
       </div>
       <canvas ref={canvasRef}></canvas>

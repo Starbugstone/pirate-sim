@@ -10,11 +10,14 @@ export const OCEAN_SEGMENTS = 500
 
 export const MAX_TREASURES = 10
 export const MAX_CANNONBALLS = 40
+export const MAX_ACTIVE_ENEMIES = 6
 export const MAX_WAKE_PARTICLES = 35
 export const MAX_ISLANDS = 15
 export const MAX_ROCKS = 12
 export const MAX_DISPOSE_PER_FRAME = 3
-export const MAX_WIND_PARTICLES = 280
+// Canvas wind streaks are intentionally modest: each one needs two camera
+// projections, so large counts quickly become CPU-bound on high-DPI screens.
+export const MAX_WIND_PARTICLES = 120
 
 export const CHUNK_SIZE = 200
 

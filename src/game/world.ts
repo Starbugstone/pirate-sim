@@ -510,6 +510,7 @@ export function createCoralReefCluster(): THREE.Group {
 
 export function spawnSunkenShip(scene: THREE.Scene, x: number, z: number) {
   const shipwreckGroup = new THREE.Group()
+  const heading = Math.random() * Math.PI * 2
   const hullGeom = new THREE.BoxGeometry(3.5, 1.8, 9)
   const hullMat = new THREE.MeshStandardMaterial({ color: 0x3d291a, roughness: 0.9 })
   const hull = new THREE.Mesh(hullGeom, hullMat)
@@ -536,14 +537,17 @@ export function spawnSunkenShip(scene: THREE.Scene, x: number, z: number) {
   shipwreckGroup.add(beaconMesh)
 
   shipwreckGroup.position.set(x, 0, z)
+  shipwreckGroup.rotation.y = heading
   scene.add(shipwreckGroup)
 
   return {
     x,
     z,
+    heading,
     radius: 6,
     mesh: shipwreckGroup,
     beaconMesh,
+    physicsState: { currentY: 0, currentPitch: 0, currentRoll: 0 },
     isLooted: false,
     lootValue: 120 + Math.floor(Math.random() * 150)
   }

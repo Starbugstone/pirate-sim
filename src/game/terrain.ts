@@ -1,5 +1,6 @@
 // @ts-nocheck
 import * as THREE from 'three'
+import { WAVES } from './ocean'
 
 // ── 1. Fast 2D Simplex / Value Noise implementation ──
 function grad2(hash: number, x: number, y: number): number {
@@ -321,13 +322,34 @@ export function generateIslandMesh(
 }
 
 // ── 6. Organic Shoreline Washing Foam ──
+const shoreFoamTime = { value: 0 }
+
+export function updateShorelineFoamTime(time: number) {
+  shoreFoamTime.value = time
+}
+
 const shoreFoamMaterial = new THREE.ShaderMaterial({
   vertexShader: `
+    uniform float uTime;
     varying vec2 vUv;
     varying vec3 vWorldPos;
+
+    void gerstnerWave(vec2 pos, vec2 dir, float freq, float spd, float amp, float Q,
+                      inout vec3 disp) {
+      float phase = dot(pos, dir) * freq + uTime * spd;
+      float c = cos(phase);
+      float s = sin(phase);
+      disp.x += dir.x * Q * amp * c;
+      disp.y += amp * s;
+      disp.z += dir.y * Q * amp * c;
+    }
+
     void main() {
       vUv = uv;
       vec4 wp = modelMatrix * vec4(position, 1.0);
+      vec3 disp = vec3(0.0);
+${WAVES.map((w) => `      gerstnerWave(wp.xz, vec2(${w[0].toFixed(4)}, ${w[1].toFixed(4)}), ${w[2].toFixed(4)}, ${w[3].toFixed(4)}, ${w[4].toFixed(4)}, ${w[5].toFixed(4)}, disp);`).join('\n')}
+      wp.xyz += disp;
       vWorldPos = wp.xyz;
       gl_Position = projectionMatrix * viewMatrix * wp;
     }
@@ -378,7 +400,7 @@ const shoreFoamMaterial = new THREE.ShaderMaterial({
     }
   `,
   uniforms: {
-    uTime: { value: 0 }
+    uTime: shoreFoamTime
   },
   transparent: true,
   side: THREE.DoubleSide,
@@ -439,11 +461,11 @@ function createShorelineFoam(
   geometry.setIndex(indices)
   geometry.computeVertexNormals()
 
-  const mesh = new THREE.Mesh(geometry, shoreFoamMaterial.clone())
+  const material = shoreFoamMaterial.clone()
+  // Cloning normally duplicates uniforms; share the ocean simulation clock instead.
+  material.uniforms.uTime = shoreFoamTime
+  const mesh = new THREE.Mesh(geometry, material)
   mesh.renderOrder = 1
-  mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, _material, _group) => {
-    ;(mesh.material as THREE.ShaderMaterial).uniforms.uTime.value = performance.now() * 0.001
-  }
   group.add(mesh)
 
   return group

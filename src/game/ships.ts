@@ -1065,7 +1065,14 @@ function createCorsairRammerMesh(scale: number): THREE.Group {
 
 export function updateShipBuoyancy(
   shipMesh: THREE.Object3D,
-  physicsState: { currentY: number; currentPitch: number; currentRoll: number },
+  physicsState: {
+    currentY: number
+    currentPitch: number
+    currentRoll: number
+    heaveVelocity?: number
+    pitchVelocity?: number
+    rollVelocity?: number
+  },
   x: number,
   z: number,
   heading: number,
@@ -1089,24 +1096,42 @@ export function updateShipBuoyancy(
   const pBowP  = getGerstnerDisplacement(x + sinA * halfL * 0.7 - cosA * halfB * 0.7, z + cosA * halfL * 0.7 + sinA * halfB * 0.7, time)
   const pBowS  = getGerstnerDisplacement(x + sinA * halfL * 0.7 + cosA * halfB * 0.7, z + cosA * halfL * 0.7 - sinA * halfB * 0.7, time)
 
-  const avgY = (pBow.y + pStern.y + pPort.y + pStbd.y + pBowP.y + pBowS.y) / 6.0
+  // The centre of buoyancy is weighted toward the broad middle of the hull;
+  // bow samples still provide the early response needed when meeting a swell.
+  const avgY = (
+    pBow.y * 0.12 + pStern.y * 0.16 +
+    pPort.y * 0.24 + pStbd.y * 0.24 +
+    pBowP.y * 0.12 + pBowS.y * 0.12
+  )
 
   const bowLift = Math.min(0.8, speed * 0.05)
   const targetY = avgY - 0.25 + bowLift * 0.2
 
   const wavePitch = Math.atan2(pBow.y - pStern.y, length)
-  const targetPitch = wavePitch * 1.35 - bowLift * 0.08
+  const targetPitch = wavePitch * 1.18 - bowLift * 0.065
 
   const waveRoll = Math.atan2(pPort.y - pStbd.y, beam)
   const turnBank = -turnRate * speed * 0.035
-  const targetRoll = waveRoll * 1.25 + turnBank
+  const targetRoll = waveRoll * 1.08 + turnBank
 
-  const dampY   = 1.0 - Math.exp(-12.0 * dt)
-  const dampRot = 1.0 - Math.exp(-10.0 * dt)
+  // A damped spring gives the hull mass. Direct interpolation made the ship
+  // stick to every ripple and produced the nervous, weightless motion seen before.
+  const step = Math.min(dt, 1 / 30)
+  physicsState.heaveVelocity ??= 0
+  physicsState.pitchVelocity ??= 0
+  physicsState.rollVelocity ??= 0
 
-  physicsState.currentY     += (targetY - physicsState.currentY) * dampY
-  physicsState.currentPitch += (targetPitch - physicsState.currentPitch) * dampRot
-  physicsState.currentRoll  += (targetRoll - physicsState.currentRoll) * dampRot
+  const heaveAccel = (targetY - physicsState.currentY) * 18.0 - physicsState.heaveVelocity * 7.8
+  physicsState.heaveVelocity += heaveAccel * step
+  physicsState.currentY += physicsState.heaveVelocity * step
+
+  const pitchAccel = (targetPitch - physicsState.currentPitch) * 15.0 - physicsState.pitchVelocity * 7.2
+  physicsState.pitchVelocity += pitchAccel * step
+  physicsState.currentPitch += physicsState.pitchVelocity * step
+
+  const rollAccel = (targetRoll - physicsState.currentRoll) * 13.0 - physicsState.rollVelocity * 6.5
+  physicsState.rollVelocity += rollAccel * step
+  physicsState.currentRoll += physicsState.rollVelocity * step
 
   shipMesh.position.x = x
   shipMesh.position.y = physicsState.currentY

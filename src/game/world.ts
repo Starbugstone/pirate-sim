@@ -27,10 +27,12 @@ export function createDetailedPalmTree(scale = 1.0): THREE.Group {
   const curveAmt = (0.8 + Math.random() * 0.8) * scale
   for (let i = 0; i < pos.count; i++) {
     const y = pos.getY(i)
-    const normY = (y + trunkHeight / 2) / trunkHeight
-    const offset = Math.pow(normY, 1.8) * curveAmt
-    pos.setX(i, pos.getX(i) + Math.cos(curveDir) * offset)
-    pos.setZ(i, pos.getZ(i) + Math.sin(curveDir) * offset)
+    const normY = trunkHeight > 0.0001 ? (y + trunkHeight / 2) / trunkHeight : 0
+    const offset = Math.pow(Math.max(0, normY), 1.8) * curveAmt
+    const nx = pos.getX(i) + Math.cos(curveDir) * offset
+    const nz = pos.getZ(i) + Math.sin(curveDir) * offset
+    pos.setX(i, isFinite(nx) ? nx : 0)
+    pos.setZ(i, isFinite(nz) ? nz : 0)
   }
   trunkGeom.computeVertexNormals()
 
@@ -357,14 +359,15 @@ export function spawnRock(scene: THREE.Scene, x: number, z: number) {
       let vy = posAttr.getY(i)
       let vz = posAttr.getZ(i)
 
-      const normY = vy / halfH // -1.0 at bottom base, +1.0 at top rim
+      const normY = halfH > 0.0001 ? vy / halfH : 0 // -1.0 at bottom base, +1.0 at top rim
 
       // Multi-octave 3D noise for organic rocky ledges
       const n1 = fbm(vx * 0.07 + seed, vy * 0.07 + seed, 4) * noiseAmp * 1.8
       const n2 = fbm(vz * 0.10 + seed, vy * 0.09 + seed, 3) * noiseAmp * 1.5
       
       // Bulging lower cliff footing & flared underwater base (vy < 0)
-      const baseFlare = vy < 0 ? 1.0 + Math.pow(Math.abs(vy) / halfH, 1.3) * 0.45 : 1.0
+      const absNormY = halfH > 0.0001 ? Math.abs(vy) / halfH : 0
+      const baseFlare = vy < 0 ? 1.0 + Math.pow(absNormY, 1.3) * 0.45 : 1.0
       
       // Weathered Rounded Dome Top (prevents cone spikes, creates rounded worn table top)
       let topDome = 1.0
@@ -377,9 +380,9 @@ export function spawnRock(scene: THREE.Scene, x: number, z: number) {
       vx = (vx + (isNaN(n1) ? 0 : n1)) * baseFlare * topDome
       vz = (vz + (isNaN(n2) ? 0 : n2)) * baseFlare * topDome
 
-      if (isNaN(vx)) vx = 0
-      if (isNaN(vy)) vy = 0
-      if (isNaN(vz)) vz = 0
+      if (!isFinite(vx) || isNaN(vx)) vx = 0
+      if (!isFinite(vy) || isNaN(vy)) vy = 0
+      if (!isFinite(vz) || isNaN(vz)) vz = 0
 
       posAttr.setXYZ(i, vx, vy, vz)
     }

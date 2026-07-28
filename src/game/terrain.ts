@@ -139,9 +139,10 @@ export function generateIslandMesh(
 } {
   const group = new THREE.Group()
 
-  // High detail radial disc grid
-  const segments = Math.min(80, Math.floor(radius * 1.6))
-  const geometry = new THREE.PlaneGeometry(radius * 2.2, radius * 2.2, segments, segments)
+  // High detail radial polar disc grid (zero square corners underwater!)
+  const radialRings = Math.min(50, Math.floor(radius * 1.1))
+  const angularSegs = 64
+  const geometry = new THREE.RingGeometry(0.1, radius * 1.45, angularSegs, radialRings)
   geometry.rotateX(-Math.PI / 2) // Lay flat on XZ plane
 
   const posAttr = geometry.attributes.position
@@ -165,10 +166,18 @@ export function generateIslandMesh(
   // Height function based on archetype
   const heightmapFn = (localX: number, localZ: number): number => {
     const dist = Math.sqrt(localX * localX + localZ * localZ)
-    const normDist = dist / radius
-    if (normDist >= 1.05) return -12.0
-
     const angle = Math.atan2(localZ, localX)
+
+    // Organic coastline perturbation
+    const coastlineDist = radius * (0.85 + fbm(Math.cos(angle) * 2.5 + seed, Math.sin(angle) * 2.5 + seed, 3) * 0.25)
+    const normDist = dist / coastlineDist
+
+    if (normDist >= 1.0) {
+      // Smooth organic underwater skirt dropping to -35m
+      const skirtT = Math.min(1.0, (dist - coastlineDist) / (radius * 0.5))
+      return THREE.MathUtils.lerp(-1.2, -35.0, Math.pow(skirtT, 0.65))
+    }
+
     const nx = localX * 0.02 + seed
     const nz = localZ * 0.02 + seed
 
@@ -178,18 +187,16 @@ export function generateIslandMesh(
 
     switch (archetype) {
       case IslandArchetype.Atoll: {
-        // Ring shape with central lagoon
         const ringDist = Math.abs(normDist - 0.55)
         const ringShape = Math.exp(-ringDist * ringDist * 12.0)
         baseHeight = (ringShape * 18.0 + islandNoise * 6.0) * edgeFalloff
         if (normDist < 0.35) {
-          baseHeight = -1.5 + islandNoise * 1.0 // Shallow inner lagoon
+          baseHeight = -1.5 + islandNoise * 1.0
         }
         break
       }
 
       case IslandArchetype.VolcanicPeak: {
-        // Towering volcanic mountain with steep rugged crater ridges
         const peakCone = Math.pow(Math.max(0, 1.0 - normDist), 1.2)
         const ridgeNoise = Math.abs(fbm(nx * 2, nz * 2, 4))
         const craterCut = (normDist < 0.15) ? (1.0 - Math.exp(-Math.pow(normDist / 0.15, 2) * 3)) : 1.0
@@ -198,12 +205,11 @@ export function generateIslandMesh(
       }
 
       case IslandArchetype.PirateBay: {
-        // Horseshoe / Crescent island with deep sheltered bay and coastal cliffs
         const bayAngle = Math.PI * 0.2
         const angleDiff = Math.abs(Math.atan2(Math.sin(angle - bayAngle), Math.cos(angle - bayAngle)))
         let bayFactor = 1.0
         if (angleDiff < 0.95 && normDist < 0.75) {
-          bayFactor = Math.pow(angleDiff / 0.95, 2.0) * 0.3 // Cut bay out
+          bayFactor = Math.pow(angleDiff / 0.95, 2.0) * 0.3
         }
         const hillCone = Math.pow(Math.max(0, 1.0 - normDist), 1.1)
         baseHeight = (hillCone * 45.0 + islandNoise * 18.0) * bayFactor * edgeFalloff
@@ -212,17 +218,10 @@ export function generateIslandMesh(
 
       case IslandArchetype.TreasureCay:
       default: {
-        // Rolling tropical island with lush elevated ridges
         const rollingHills = Math.pow(Math.max(0, 1.0 - normDist), 1.1)
         baseHeight = (rollingHills * 32.0 + islandNoise * 14.0) * edgeFalloff
         break
       }
-    }
-
-    // Blend underwater skirt smoothly to y = -14
-    if (normDist > 0.88) {
-      const t = (normDist - 0.88) / 0.17
-      baseHeight = THREE.MathUtils.lerp(baseHeight, -14.0, t)
     }
 
     return baseHeight

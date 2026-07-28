@@ -1,6 +1,7 @@
 // @ts-nocheck
 import * as THREE from 'three'
 import { SHIP_TYPES } from './constants'
+import { getGerstnerDisplacement } from './ocean'
 
 // Cache procedural sail & flag textures to avoid recreating canvas unnecessarily
 const textureCache: Record<string, THREE.CanvasTexture> = {}
@@ -1060,4 +1061,64 @@ function createCorsairRammerMesh(scale: number): THREE.Group {
   mesh.userData.flagMesh = flagMesh
 
   return mesh
+}
+
+export function updateShipBuoyancy(
+  shipMesh: THREE.Object3D,
+  physicsState: { currentY: number; currentPitch: number; currentRoll: number },
+  x: number,
+  z: number,
+  heading: number,
+  speed: number,
+  turnRate: number,
+  time: number,
+  dt: number,
+  length = 12,
+  beam = 5
+) {
+  const sinA = Math.sin(heading)
+  const cosA = Math.cos(heading)
+
+  const halfL = length * 0.5
+  const halfB = beam * 0.5
+
+  const pBow   = getGerstnerDisplacement(x + sinA * halfL, z + cosA * halfL, time)
+  const pStern = getGerstnerDisplacement(x - sinA * halfL, z - cosA * halfL, time)
+  const pPort  = getGerstnerDisplacement(x - cosA * halfB, z + sinA * halfB, time)
+  const pStbd  = getGerstnerDisplacement(x + cosA * halfB, z - sinA * halfB, time)
+  const pBowP  = getGerstnerDisplacement(x + sinA * halfL * 0.7 - cosA * halfB * 0.7, z + cosA * halfL * 0.7 + sinA * halfB * 0.7, time)
+  const pBowS  = getGerstnerDisplacement(x + sinA * halfL * 0.7 + cosA * halfB * 0.7, z + cosA * halfL * 0.7 - sinA * halfB * 0.7, time)
+
+  const avgY = (pBow.y + pStern.y + pPort.y + pStbd.y + pBowP.y + pBowS.y) / 6.0
+
+  const bowLift = Math.min(0.8, speed * 0.05)
+  const targetY = avgY - 0.25 + bowLift * 0.2
+
+  const wavePitch = Math.atan2(pBow.y - pStern.y, length)
+  const targetPitch = wavePitch * 1.35 - bowLift * 0.08
+
+  const waveRoll = Math.atan2(pPort.y - pStbd.y, beam)
+  const turnBank = -turnRate * speed * 0.035
+  const targetRoll = waveRoll * 1.25 + turnBank
+
+  const dampY   = 1.0 - Math.exp(-12.0 * dt)
+  const dampRot = 1.0 - Math.exp(-10.0 * dt)
+
+  physicsState.currentY     += (targetY - physicsState.currentY) * dampY
+  physicsState.currentPitch += (targetPitch - physicsState.currentPitch) * dampRot
+  physicsState.currentRoll  += (targetRoll - physicsState.currentRoll) * dampRot
+
+  shipMesh.position.x = x
+  shipMesh.position.y = physicsState.currentY
+  shipMesh.position.z = z
+
+  shipMesh.rotation.x = physicsState.currentPitch
+  shipMesh.rotation.z = physicsState.currentRoll
+  shipMesh.rotation.y = heading
+
+  return {
+    dispBow: pBow,
+    dispStern: pStern,
+    dispCenter: { x, y: avgY, z }
+  }
 }

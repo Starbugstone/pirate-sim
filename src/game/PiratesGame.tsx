@@ -10,8 +10,8 @@ import {
   ENEMY_ALERT_DIST, ENEMY_ATTACK_DIST
 } from './constants'
 import { normalizeAngle, shortestAngleDelta } from './helpers'
-import { createOcean, updateOcean, getOceanHeight, getGerstnerDisplacement, createSprayPool, emitSpray, updateSpray } from './ocean'
-import { createPlayerShip as buildPlayerShip, createEnemyShipMesh } from './ships'
+import { createOcean, updateOcean, setOceanIslands, getOceanHeight, getGerstnerDisplacement, createSprayPool, emitSpray, updateSpray } from './ocean'
+import { createPlayerShip as buildPlayerShip, createEnemyShipMesh, updateShipBuoyancy } from './ships'
 import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
 import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, createCannonMuzzleFlash, updateMuzzleFlashes } from './effects'
 import { createAmbientFish, updateAmbientFish } from './ambientFish'
@@ -157,6 +157,7 @@ const playerSpeed = ref(0)
 
 // Ship state
 let playerShip
+const playerPhysicsState = { currentY: 0, currentPitch: 0, currentRoll: 0 }
 const playerPos = ref({ x: 0, z: 0 })
 let playerAngle = 0
 let targetRotation = 0
@@ -463,8 +464,8 @@ function processDisposalQueue() {
 
 function init() {
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x87ceeb)
-  scene.fog = new THREE.Fog(0x87ceeb, 80, 420)
+  scene.background = new THREE.Color(0x64a6d6)
+  scene.fog = new THREE.Fog(0x18486b, 180, 750)
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000)
   camera.position.set(0, 30, -40)
   camera.lookAt(0, 0, 0)
@@ -2249,6 +2250,7 @@ function updateMinimap() {
 }
 
 function update(dt) {
+  oceanTime += dt
   processDisposalQueue()
   updateMuzzleFlashes(scene, dt)
 
@@ -2488,38 +2490,42 @@ function update(dt) {
     lastCleanupTime = Date.now()
   }
 
-  // Update ship mesh — sample wave heights to bob on the surface
+  // Update player ship mesh with multi-point hull buoyancy physics
   const px = playerPos.value.x
   const pz = playerPos.value.z
-  playerShip.position.x = px
-  playerShip.position.z = pz
+  const spd = playerSpeed.value
 
-  const dispCenter = getGerstnerDisplacement(px, pz, oceanTime)
-  const bowOff = 6, sideOff = 3
-  const dispBow   = getGerstnerDisplacement(px + Math.sin(playerAngle) * bowOff,  pz + Math.cos(playerAngle) * bowOff, oceanTime)
-  const dispStern = getGerstnerDisplacement(px - Math.sin(playerAngle) * bowOff,  pz - Math.cos(playerAngle) * bowOff, oceanTime)
-  const dispPort  = getGerstnerDisplacement(px - Math.cos(playerAngle) * sideOff, pz + Math.sin(playerAngle) * sideOff, oceanTime)
-  const dispStbd  = getGerstnerDisplacement(px + Math.cos(playerAngle) * sideOff, pz - Math.sin(playerAngle) * sideOff, oceanTime)
+  const physRes = updateShipBuoyancy(
+    playerShip,
+    playerPhysicsState,
+    px,
+    pz,
+    playerAngle,
+    spd,
+    angleDiff * turnSpeed,
+    oceanTime,
+    dt,
+    14,
+    6
+  )
 
-  const draftOffset = -0.25
-  playerShip.position.y = dispCenter.y + draftOffset
+  // Update ocean island & boulder shore foam list periodically
+  if (oceanMesh && frameCount % 30 === 0) {
+    setOceanIslands(oceanMesh, [...islands, ...worldObjects.islands], [...rocks, ...worldObjects.rocks])
+  }
 
-  const pitch = Math.atan2(dispBow.y - dispStern.y, bowOff * 2) * 1.5
-  const roll  = Math.atan2(dispPort.y - dispStbd.y, sideOff * 2) * 1.2
-  playerShip.rotation.x = pitch
-  playerShip.rotation.z = roll
-  playerShip.rotation.y = playerAngle
-
-  // Emit bow spray when moving through waves
-  if (sprayPool) {
-    const spd = playerSpeed.value
-    const waveSlam = Math.max(0, -(dispBow.y - dispStern.y)) * spd * 0.02
-    if (spd > 3) {
-      const sprayChance = (spd - 3) * 0.035 + waveSlam
-      if (Math.random() < sprayChance) {
-        emitSpray(sprayPool, px, pz, playerAngle, spd, 1 + Math.floor(spd / 5))
-      }
+  // Emit bow spray when moving through waves at speed
+  if (sprayPool && spd > 2.5) {
+    const waveSlam = Math.max(0, -(physRes.dispBow.y - physRes.dispStern.y)) * spd * 0.03
+    const sprayChance = (spd - 2.5) * 0.04 + waveSlam
+    if (Math.random() < sprayChance) {
+      emitSpray(sprayPool, px, pz, playerAngle, spd, 1 + Math.floor(spd / 4))
     }
+  }
+
+  // Emit player wake trail
+  if (spd > 0.5) {
+    emitWake(scene, 'player', px, pz, playerAngle, spd, 1.8)
   }
 
   // Anchor drop/raise animation
@@ -2700,7 +2706,7 @@ function update(dt) {
 
     // Enemy wake trail
     if (enemySpeed > 0.5) {
-      emitWake(scene, playerWake, enemy.x, enemy.z, enemy.angle, true)
+      emitWake(scene, `enemy_${index}`, enemy.x, enemy.z, enemy.angle, enemySpeed, 1.4)
     }
 
     // Check if enemy hit a rock (takes damage but keeps going sometimes)
@@ -2719,22 +2725,22 @@ function update(dt) {
 
     // Infinite world - no boundaries
 
-    // Update mesh — bob on waves
-    mesh.position.x = enemy.x
-    mesh.position.z = enemy.z
-    const dispEnemy = getGerstnerDisplacement(enemy.x, enemy.z, oceanTime)
-    const eFwd = 4 * (shipType.size || 1)
-    const eSide = 2 * (shipType.size || 1)
-    const eHBow   = getGerstnerDisplacement(enemy.x + Math.sin(enemy.angle) * eFwd, enemy.z + Math.cos(enemy.angle) * eFwd, oceanTime).y
-    const eHStern = getGerstnerDisplacement(enemy.x - Math.sin(enemy.angle) * eFwd, enemy.z - Math.cos(enemy.angle) * eFwd, oceanTime).y
-    const eHPort  = getGerstnerDisplacement(enemy.x - Math.cos(enemy.angle) * eSide, enemy.z + Math.sin(enemy.angle) * eSide, oceanTime).y
-    const eHStbd  = getGerstnerDisplacement(enemy.x + Math.cos(enemy.angle) * eSide, enemy.z - Math.sin(enemy.angle) * eSide, oceanTime).y
-
-    const draftOffset = -0.25
-    mesh.position.y = dispEnemy.y + draftOffset
-    mesh.rotation.x = Math.atan2(eHBow - eHStern, eFwd * 2) * 1.5
-    mesh.rotation.z = Math.atan2(eHPort - eHStbd, eSide * 2) * 1.2
-    mesh.rotation.y = enemy.angle
+    // Update enemy mesh — multi-point hull buoyancy on waves
+    mesh.userData.physicsState = mesh.userData.physicsState || { currentY: 0, currentPitch: 0, currentRoll: 0 }
+    const sizeMult = shipType.size || 1.0
+    updateShipBuoyancy(
+      mesh,
+      mesh.userData.physicsState,
+      enemy.x,
+      enemy.z,
+      enemy.angle,
+      enemySpeed,
+      diff * 0.5,
+      oceanTime,
+      dt,
+      12 * sizeMult,
+      5 * sizeMult
+    )
 
     // Animate enemy sails
     if (mesh.userData.sails) {
@@ -3103,7 +3109,7 @@ function update(dt) {
 
   // === SHIP WAKE TRAIL ===
   if (playerSpeed.value > 0.5) {
-    emitWake(scene, playerWake, playerPos.value.x, playerPos.value.z, playerAngle, false)
+    emitWake(scene, 'player', playerPos.value.x, playerPos.value.z, playerAngle, playerSpeed.value, 1.8)
   }
   tickWake(scene, playerWake, dt, oceanTime, windAngle, windSpeed.value)
 

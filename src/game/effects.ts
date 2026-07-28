@@ -64,8 +64,8 @@ interface ShipTrail {
   lastEmitTime: number
 }
 
-const MAX_TRAIL_POINTS = 80
-const MAX_TRAIL_AGE = 6.0 // seconds trail expands and fades behind vessel
+const MAX_TRAIL_POINTS = 30
+const MAX_TRAIL_AGE = 1.8 // seconds trail expands and fades behind vessel
 
 const wakeShaderMaterial = new THREE.ShaderMaterial({
   vertexShader: `
@@ -104,17 +104,17 @@ const wakeShaderMaterial = new THREE.ShaderMaterial({
 
     void main() {
       // Soft V-shaped edge fade
-      float centerFade = sin(vUv.x * 3.14159);
-      float ageFade = max(0.0, 1.0 - vAge);
+      float edgeFade = sin(vUv.x * 3.14159);
+      float ageFade = pow(max(0.0, 1.0 - vAge), 1.6);
 
-      // Fine scrolling foam texture along trail
-      vec2 p = vWorldPos.xz * 0.4 + vec2(uTime * 0.15, -uTime * 0.08);
-      float foamTex = noise(p * 2.5);
+      // Fine scrolling foam stream
+      vec2 p = vWorldPos.xz * 0.4 + vec2(uTime * 0.12, -uTime * 0.08);
+      float foamTex = noise(p * 3.0);
 
-      float foam = smoothstep(0.20, 0.65, foamTex + centerFade * 0.35) * centerFade * ageFade;
+      float foam = smoothstep(0.30, 0.70, foamTex + edgeFade * 0.25) * edgeFade * ageFade;
 
-      vec3 wakeColor = mix(vec3(0.95, 0.99, 1.0), vec3(0.72, 0.95, 0.98), vAge);
-      gl_FragColor = vec4(wakeColor, foam * 0.85 * ageFade);
+      vec3 wakeColor = mix(vec3(0.90, 0.98, 1.0), vec3(0.20, 0.70, 0.85), vAge);
+      gl_FragColor = vec4(wakeColor, foam * 0.40 * ageFade);
     }
   `,
   uniforms: {
@@ -138,7 +138,7 @@ export function emitShipWake(
   z: number,
   heading: number,
   speed: number,
-  initialWidth = 2.4
+  initialWidth = 1.6
 ) {
   let trail = shipTrails.get(shipId)
 
@@ -170,10 +170,20 @@ export function emitShipWake(
   }
 
   const now = performance.now() * 0.001
-  if (now - trail.lastEmitTime > 0.04) {
+  if (now - trail.lastEmitTime > 0.05) {
     const sternOffset = initialWidth * 0.8
     const sternX = x - Math.sin(heading) * sternOffset
     const sternZ = z - Math.cos(heading) * sternOffset
+
+    // Distance sanity check: clear trail if ship jumped > 4 units in a single step (prevents long stretched lines)
+    if (trail.points.length > 0) {
+      const lastP = trail.points[0]
+      const dx = sternX - lastP.origX
+      const dz = sternZ - lastP.origZ
+      if (dx * dx + dz * dz > 16.0) {
+        trail.points = []
+      }
+    }
 
     trail.points.unshift({
       origX: sternX,
@@ -234,7 +244,7 @@ export function updateShipWakes(
       const normAge = Math.min(1.0, p.age / MAX_TRAIL_AGE)
 
       // V-shaped wake widening over time
-      const currentWidth = p.initialWidth + p.age * (1.1 + p.speed * 0.12)
+      const currentWidth = p.initialWidth + p.age * (0.35 + p.speed * 0.04)
 
       // Perpendicular vector to ship heading
       const perpX = Math.cos(p.heading) * currentWidth * 0.5
@@ -245,12 +255,12 @@ export function updateShipWakes(
 
       // Left vertex
       posArr[vertIdx++] = disp.x - perpX
-      posArr[vertIdx++] = disp.y + 0.06
+      posArr[vertIdx++] = disp.y + 0.04
       posArr[vertIdx++] = disp.z - perpZ
 
       // Right vertex
       posArr[vertIdx++] = disp.x + perpX
-      posArr[vertIdx++] = disp.y + 0.06
+      posArr[vertIdx++] = disp.y + 0.04
       posArr[vertIdx++] = disp.z + perpZ
 
       const v = i / (trail.points.length - 1)
@@ -268,117 +278,129 @@ export function updateShipWakes(
     uvAttr.needsUpdate = true
     ageAttr.needsUpdate = true
 
-    trail.geometry.setDrawRange(0, (trail.points.length - 1) * 6)
+    if (posAttr.updateRange) {
+      posAttr.updateRange.offset = 0
+      posAttr.updateRange.count = vertIdx
+    }
+    if (uvAttr.updateRange) {
+      uvAttr.updateRange.offset = 0
+      uvAttr.updateRange.count = uvIdx
+    }
+    if (ageAttr.updateRange) {
+      ageAttr.updateRange.offset = 0
+      ageAttr.updateRange.count = ageIdx
+    }
+    trail.geometry.setDrawRange(0, trail.points.length * 2)
   })
 }
 
-// Backwards-compatible legacy exports
-export function spawnWakeParticle(scene: THREE.Scene, _wakeArray: any, x: number, z: number, angle: number, isEnemy: boolean) {
-  const id = isEnemy ? `enemy_${x.toFixed(1)}_${z.toFixed(1)}` : 'player'
-  emitShipWake(scene, id, x, z, angle, 5.0, isEnemy ? 2.0 : 2.6)
+// Legacy wrapper supporting both direct shipId or legacy object arguments
+export function spawnWakeParticle(
+  scene: THREE.Scene,
+  shipIdOrArray: any,
+  x: number,
+  z: number,
+  heading: number,
+  speedOrIsEnemy: number | boolean = 3,
+  width = 1.6
+) {
+  let shipId: string | number = 'player'
+  let speed = typeof speedOrIsEnemy === 'number' ? speedOrIsEnemy : 3.0
+
+  if (typeof shipIdOrArray === 'string' || typeof shipIdOrArray === 'number') {
+    shipId = shipIdOrArray
+  } else if (speedOrIsEnemy === true) {
+    shipId = `enemy_${Math.round(x * 10)}_${Math.round(z * 10)}`
+  }
+
+  emitShipWake(scene, shipId, x, z, heading, speed, width)
 }
 
 export function updateWakeParticles(scene: THREE.Scene, _wakeArray: any, dt: number, time = 0, windAngle = 0, windStrength = 3) {
   updateShipWakes(scene, dt, time, windAngle, windStrength)
 }
 
-/**
- * Cannon muzzle flash & billowy smoke burst
- */
-interface MuzzleParticle {
-  mesh: THREE.Mesh
-  light?: THREE.PointLight
-  life: number
-  maxLife: number
-  vx: number
-  vy: number
-  vz: number
-  growth: number
-  isLight?: boolean
-}
+export function createCannonMuzzleFlash(scene: THREE.Scene, x: number, y: number, z: number, angle: number) {
+  const flashGroup = new THREE.Group()
 
-const muzzleParticles: MuzzleParticle[] = []
-
-export function createCannonMuzzleFlash(scene: THREE.Scene, pos: THREE.Vector3, dir: THREE.Vector3) {
-  const flashLight = new THREE.PointLight(0xffaa22, 6, 12)
-  flashLight.position.copy(pos)
-  scene.add(flashLight)
-
-  muzzleParticles.push({
-    mesh: new THREE.Mesh(),
-    light: flashLight,
-    life: 0.12,
-    maxLife: 0.12,
-    vx: 0, vy: 0, vz: 0, growth: 0,
-    isLight: true
+  const flashGeom = new THREE.SphereGeometry(0.6, 8, 8)
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xffaa00,
+    transparent: true,
+    opacity: 1.0
   })
+  const flash = new THREE.Mesh(flashGeom, flashMat)
+  flashGroup.add(flash)
 
-  const fireGeom = new THREE.SphereGeometry(0.5, 6, 6)
-  const fireMat = new THREE.MeshBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.9 })
-  const fireMesh = new THREE.Mesh(fireGeom, fireMat)
-  fireMesh.position.copy(pos)
-  scene.add(fireMesh)
-
-  muzzleParticles.push({
-    mesh: fireMesh,
-    life: 0.15,
-    maxLife: 0.15,
-    vx: dir.x * 3,
-    vy: 0.5,
-    vz: dir.z * 3,
-    growth: 4.0
-  })
-
-  const smokeGeom = new THREE.SphereGeometry(0.6, 6, 6)
-  for (let i = 0; i < 3; i++) {
-    const smokeMat = new THREE.MeshBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.5 })
-    const smokeMesh = new THREE.Mesh(smokeGeom, smokeMat)
-    smokeMesh.position.copy(pos).add(new THREE.Vector3(
-      (Math.random() - 0.5) * 0.4,
-      (Math.random() - 0.5) * 0.4,
-      (Math.random() - 0.5) * 0.4
-    ))
-    scene.add(smokeMesh)
-
-    muzzleParticles.push({
-      mesh: smokeMesh,
-      life: 0.35 + Math.random() * 0.2,
-      maxLife: 0.5,
-      vx: dir.x * (4 + Math.random() * 3) + (Math.random() - 0.5) * 1.5,
-      vy: 1.0 + Math.random() * 1.0,
-      vz: dir.z * (4 + Math.random() * 3) + (Math.random() - 0.5) * 1.5,
-      growth: 3.5
+  for (let i = 0; i < 4; i++) {
+    const smokeGeom = new THREE.SphereGeometry(0.5 + Math.random() * 0.4, 6, 6)
+    const smokeMat = new THREE.MeshBasicMaterial({
+      color: 0x888888,
+      transparent: true,
+      opacity: 0.6
     })
+    const smoke = new THREE.Mesh(smokeGeom, smokeMat)
+    const offsetDist = 0.5 + Math.random() * 0.8
+    const offsetAngle = angle + (Math.random() - 0.5) * 0.8
+    smoke.position.set(
+      Math.sin(offsetAngle) * offsetDist,
+      (Math.random() - 0.5) * 0.3,
+      Math.cos(offsetAngle) * offsetDist
+    )
+    smoke.userData.vx = Math.sin(offsetAngle) * (2 + Math.random() * 2)
+    smoke.userData.vy = 0.5 + Math.random() * 1.0
+    smoke.userData.vz = Math.cos(offsetAngle) * (2 + Math.random() * 2)
+    smoke.userData.maxLife = 0.5 + Math.random() * 0.3
+    smoke.userData.life = smoke.userData.maxLife
+    flashGroup.add(smoke)
+  }
+
+  const flashLight = new THREE.PointLight(0xffaa22, 5, 20)
+  flashLight.position.set(0, 0, 0)
+  flashGroup.add(flashLight)
+
+  flashGroup.position.set(x, y, z)
+  scene.add(flashGroup)
+
+  return {
+    group: flashGroup,
+    light: flashLight,
+    life: 0.4,
+    maxLife: 0.4
   }
 }
 
+const activeFlashes: any[] = []
+
+export function addMuzzleFlash(flash: any) {
+  activeFlashes.push(flash)
+}
+
 export function updateMuzzleFlashes(scene: THREE.Scene, dt: number) {
-  for (let i = muzzleParticles.length - 1; i >= 0; i--) {
-    const p = muzzleParticles[i]
-    p.life -= dt
+  for (let i = activeFlashes.length - 1; i >= 0; i--) {
+    const flash = activeFlashes[i]
+    flash.life -= dt
 
-    if (p.isLight && p.light) {
-      p.light.intensity = Math.max(0, (p.life / p.maxLife) * 6)
-      if (p.life <= 0) {
-        scene.remove(p.light)
-        p.light.dispose()
-        muzzleParticles.splice(i, 1)
+    if (flash.light) {
+      flash.light.intensity = (flash.life / flash.maxLife) * 5
+    }
+
+    flash.group.children.forEach((child: any) => {
+      if (child.userData.vx !== undefined) {
+        child.position.x += child.userData.vx * dt
+        child.position.y += child.userData.vy * dt
+        child.position.z += child.userData.vz * dt
+        child.userData.life -= dt
+        if (child.material) {
+          child.material.opacity = Math.max(0, child.userData.life / child.userData.maxLife) * 0.6
+        }
       }
-      continue
-    }
+    })
 
-    if (p.life <= 0) {
-      disposeMesh(p.mesh, scene)
-      muzzleParticles.splice(i, 1)
-      continue
-    }
-
-    p.mesh.position.x += p.vx * dt
-    p.mesh.position.y += p.vy * dt
-    p.mesh.position.z += p.vz * dt
-    p.mesh.scale.addScalar(p.growth * dt)
-    if (p.mesh.material) {
-      p.mesh.material.opacity = (p.life / p.maxLife) * 0.6
+    if (flash.life <= 0) {
+      scene.remove(flash.group)
+      disposeMesh(flash.group)
+      activeFlashes.splice(i, 1)
     }
   }
 }

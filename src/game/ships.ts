@@ -2,7 +2,7 @@
 import * as THREE from 'three'
 import { SHIP_TYPES } from './constants'
 
-// Cache procedural sail textures to avoid recreating canvas unnecessarily
+// Cache procedural sail & flag textures to avoid recreating canvas unnecessarily
 const textureCache: Record<string, THREE.CanvasTexture> = {}
 
 function getSailTexture(type: 'player' | 'rammer' | 'sloop' | 'galleon'): THREE.CanvasTexture {
@@ -152,6 +152,100 @@ function getSailTexture(type: 'player' | 'rammer' | 'sloop' | 'galleon'): THREE.
   return texture
 }
 
+function getJollyRogerFlagTexture(): THREE.CanvasTexture {
+  if (textureCache['jolly_roger_flag']) return textureCache['jolly_roger_flag']
+
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 160
+  const ctx = canvas.getContext('2d')!
+
+  // Pitch black flag cloth
+  ctx.fillStyle = '#0f0f0f'
+  ctx.fillRect(0, 0, 256, 160)
+
+  // White Jolly Roger Skull & Crossed Bones
+  ctx.fillStyle = '#f5f5f5'
+  ctx.strokeStyle = '#f5f5f5'
+  ctx.lineWidth = 10
+  ctx.lineCap = 'round'
+
+  // Crossed bones
+  ctx.beginPath()
+  ctx.moveTo(60, 40); ctx.lineTo(196, 120)
+  ctx.moveTo(196, 40); ctx.lineTo(60, 120)
+  ctx.stroke()
+
+  const boneEnds = [[60,40],[196,120],[196,40],[60,120]]
+  boneEnds.forEach(([bx, by]) => {
+    ctx.beginPath()
+    ctx.arc(bx - 5, by, 7, 0, Math.PI * 2)
+    ctx.arc(bx + 5, by, 7, 0, Math.PI * 2)
+    ctx.fill()
+  })
+
+  // Skull dome
+  ctx.beginPath()
+  ctx.arc(128, 75, 32, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Jaw
+  ctx.fillRect(112, 96, 32, 20)
+
+  // Eye cutouts
+  ctx.fillStyle = '#0f0f0f'
+  ctx.beginPath()
+  ctx.arc(116, 75, 8, 0, Math.PI * 2)
+  ctx.arc(140, 75, 8, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Nose cutout
+  ctx.beginPath()
+  ctx.moveTo(128, 85); ctx.lineTo(123, 93); ctx.lineTo(133, 93); ctx.closePath(); ctx.fill()
+
+  // Teeth lines
+  ctx.strokeStyle = '#0f0f0f'
+  ctx.lineWidth = 3
+  for (let t = 118; t <= 138; t += 7) {
+    ctx.beginPath()
+    ctx.moveTo(t, 96); ctx.lineTo(t, 114); ctx.stroke()
+  }
+
+  const texture = new THREE.CanvasTexture(canvas)
+  textureCache['jolly_roger_flag'] = texture
+  return texture
+}
+
+function getRoyalNavalEnsignTexture(): THREE.CanvasTexture {
+  if (textureCache['royal_navy_ensign']) return textureCache['royal_navy_ensign']
+
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 160
+  const ctx = canvas.getContext('2d')!
+
+  // Red Ensign field
+  ctx.fillStyle = '#990000'
+  ctx.fillRect(0, 0, 256, 160)
+
+  // Union Jack in upper canton
+  ctx.fillStyle = '#0a2351'
+  ctx.fillRect(0, 0, 128, 80)
+
+  // St George Cross
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(52, 0, 24, 80)
+  ctx.fillRect(0, 28, 128, 24)
+
+  ctx.fillStyle = '#cc0000'
+  ctx.fillRect(58, 0, 12, 80)
+  ctx.fillRect(0, 34, 128, 12)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  textureCache['royal_navy_ensign'] = texture
+  return texture
+}
+
 /**
  * Creates the Player's Pirate Ship with high detail and dynamic shop upgrades.
  */
@@ -188,7 +282,6 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
     shininess: 10
   })
 
-  // Plain Sail Material for secondary sails
   const plainSailMat = new THREE.MeshPhongMaterial({
     color: 0xebdcc5,
     side: THREE.DoubleSide,
@@ -250,8 +343,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
   }
 
   // === 3. DECK FITTINGS (Helm, Capstan, Railings, Figurehead) ===
-  // Helm (Steering wheel) on Quarterdeck
-  const helmStand = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 1.0), railMat)
+  const helmStand = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 1.0, 8), railMat)
   helmStand.position.set(0, 5.5, -4.2)
   ship.add(helmStand)
 
@@ -262,7 +354,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
   // Railing Posts & Top Rail
   for (let side = -1; side <= 1; side += 2) {
     for (let i = 0; i < 10; i++) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.0), railMat)
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.0, 6), railMat)
       post.position.set(side * 2.7, 4.3, -6.0 + i * 1.25)
       ship.add(post)
     }
@@ -272,7 +364,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
     ship.add(railBar)
   }
 
-  // Figurehead at Bow (Ornate Dragon Head)
+  // Figurehead at Bow (Ornate Gold Dragon Head)
   const figureheadGroup = new THREE.Group()
   const dragonBody = new THREE.Mesh(new THREE.ConeGeometry(0.5, 2.2, 8), goldMat)
   dragonBody.rotation.x = Math.PI / 3
@@ -283,7 +375,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
   figureheadGroup.position.set(0, 3.2, 8.2)
   ship.add(figureheadGroup)
 
-  // Anchor Catheads & Anchors on Bow Sides
+  // Anchor Catheads on Bow Sides
   for (let side = -1; side <= 1; side += 2) {
     const cathead = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 1.5), woodMat)
     cathead.position.set(side * 2.8, 4.0, 6.5)
@@ -306,7 +398,6 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
   }
 
   // === 5. VISUAL UPGRADE: CANNONS (`cannonCount` Lvl 0–3 & `cannonSpeed`) ===
-  // Level 0: 3 per side, Lvl 1: 5 per side, Lvl 2: 7 per side, Lvl 3: 9 per side
   const numCannonsPerSide = 3 + cannonCountLvl * 2
   const portCannons: any[] = []
   const starboardCannons: any[] = []
@@ -334,11 +425,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
     cannonL.position.set(-3.4, 2.6, zPos)
     ship.add(cannonL)
 
-    portCannons.push({
-      mesh: cannonL,
-      zOffset: zPos,
-      sideSign: -1
-    })
+    portCannons.push({ mesh: cannonL, zOffset: zPos, sideSign: -1 })
 
     // Starboard Side (+X)
     const portHoleR = new THREE.Mesh(portHoleGeom, portHoleMat)
@@ -352,17 +439,12 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
     cannonR.position.set(3.4, 2.6, zPos)
     ship.add(cannonR)
 
-    starboardCannons.push({
-      mesh: cannonR,
-      zOffset: zPos,
-      sideSign: 1
-    })
+    starboardCannons.push({ mesh: cannonR, zOffset: zPos, sideSign: 1 })
   }
 
   ship.userData.portCannons = portCannons
   ship.userData.starboardCannons = starboardCannons
 
-  // Extra Ammunition Kegs on deck for `cannonSpeed` upgrade
   if (cannonSpeedLvl > 0) {
     const kegGeom = new THREE.CylinderGeometry(0.3, 0.35, 0.8, 8)
     const kegMat = new THREE.MeshPhongMaterial({ color: 0x5c3317 })
@@ -376,33 +458,27 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
   // === 6. MASTS & RIGGING ===
   const sails: THREE.Mesh[] = []
 
-  // Main Mast (Center)
   const mainMast = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 18.0, 10), mastMat)
   mainMast.position.set(0, 12.0, -0.5)
   ship.add(mainMast)
 
-  // Foremast (Front)
   const foreMast = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 15.0, 10), mastMat)
   foreMast.position.set(0, 10.5, 4.5)
   ship.add(foreMast)
 
-  // Mizzenmast (Rear)
   const mizzenMast = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 12.0, 10), mastMat)
   mizzenMast.position.set(0, 9.0, -4.8)
   ship.add(mizzenMast)
 
-  // Bowsprit pole extending forward
   const bowsprit = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 9.0, 8), mastMat)
   bowsprit.rotation.x = Math.PI / 4
   bowsprit.position.set(0, 4.8, 10.5)
   ship.add(bowsprit)
 
-  // Crow's Nest on Main Mast
   const nest = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.9, 0.7, 10), railMat)
   nest.position.set(0, 17.5, -0.5)
   ship.add(nest)
 
-  // Shrouds & Ratlines (Rope ladder grids)
   for (let side = -1; side <= 1; side += 2) {
     const shroudGeom = new THREE.CylinderGeometry(0.04, 0.04, 14.0, 6)
     const shroudL = new THREE.Mesh(shroudGeom, ropeMat)
@@ -411,7 +487,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
     ship.add(shroudL)
   }
 
-  // === 7. SAILS & YARDS (With dynamic wind deformation support) ===
+  // === 7. SAILS & YARDS ===
   function createSail(width: number, height: number, yPos: number, zPos: number, isMainSkull = false) {
     const yardGroup = new THREE.Group()
     yardGroup.position.set(0, yPos, zPos)
@@ -447,14 +523,11 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
     return yardGroup
   }
 
-  // Base Sails: Main, Fore, Mizzen
   createSail(8.5, 9.5, 12.0, -0.5, true)  // Main Sail with Skull Emblem!
   createSail(6.5, 7.5, 10.5, 4.5, false)  // Fore Sail
   createSail(5.0, 6.0, 9.0, -4.8, false)  // Mizzen Sail
 
-  // VISUAL UPGRADE: Extra Sails (`sailSpeed` Lvl 1–3)
   if (sailSpeedLvl >= 1) {
-    // Jib staysail on Bowsprit
     const jibGeom = new THREE.BufferGeometry()
     const vertices = new Float32Array([
       0, 4.5, 6.5,
@@ -468,42 +541,35 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
   }
 
   if (sailSpeedLvl >= 2) {
-    // Topgallant upper sails on Main & Fore masts
     createSail(6.0, 4.5, 18.0, -0.5, false)
     createSail(4.5, 3.5, 15.5, 4.5, false)
   }
 
   if (sailSpeedLvl >= 3) {
-    // Royal sky sail on Main Mast peak
     createSail(4.0, 3.0, 21.0, -0.5, false)
   }
 
   ship.userData.sails = sails
 
-  // === 8. DYNAMIC JOLLY ROGER FLAG ===
+  // === 8. DYNAMIC JOLLY ROGER PIRATE FLAG ON TOPMAST PEAK ===
+  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 3.5, 6), mastMat)
+  flagPole.position.set(0, 22.0, -0.5)
+  ship.add(flagPole)
+
+  const truckGold = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 8), goldMat)
+  truckGold.position.set(0, 23.75, -0.5)
+  ship.add(truckGold)
+
   const flagGroup = new THREE.Group()
-  const flagGeom = new THREE.PlaneGeometry(2.5, 1.5, 8, 4)
+  const flagGeom = new THREE.PlaneGeometry(3.0, 1.8, 10, 5)
 
-  // Flag texture with small Skull & Crossbones
-  const flagCanvas = document.createElement('canvas')
-  flagCanvas.width = 256
-  flagCanvas.height = 160
-  const fctx = flagCanvas.getContext('2d')!
-  fctx.fillStyle = '#0a0a0a'
-  fctx.fillRect(0, 0, 256, 160)
-  fctx.fillStyle = '#ffffff'
-  fctx.beginPath(); fctx.arc(128, 70, 25, 0, Math.PI * 2); fctx.fill()
-  fctx.fillRect(112, 90, 32, 18)
-  fctx.fillStyle = '#0a0a0a'
-  fctx.beginPath(); fctx.arc(118, 68, 6, 0, Math.PI * 2); fctx.arc(138, 68, 6, 0, Math.PI * 2); fctx.fill()
-  const flagTexture = new THREE.CanvasTexture(flagCanvas)
-
-  const flagMat = new THREE.MeshPhongMaterial({ map: flagTexture, side: THREE.DoubleSide })
+  const jollyTexture = getJollyRogerFlagTexture()
+  const flagMat = new THREE.MeshPhongMaterial({ map: jollyTexture, side: THREE.DoubleSide })
   const flagMesh = new THREE.Mesh(flagGeom, flagMat)
-  flagMesh.position.set(1.25, 0, 0)
+  flagMesh.position.set(1.5, 0, 0)
   flagGroup.add(flagMesh)
 
-  flagGroup.position.set(0, 20.0, -0.5)
+  flagGroup.position.set(0, 22.8, -0.5)
   flagGroup.rotation.y = Math.PI / 2
   ship.add(flagGroup)
   ship.userData.flagMesh = flagMesh
@@ -525,203 +591,388 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
 }
 
 /**
- * Creates distinct 3D visual models for the 3 AI Enemy Ships.
+ * Creates distinct, high-detail 3D visual models for Royal Naval & Pirate Warships.
  */
 export function createEnemyShipMesh(shipType: any): THREE.Group {
-  const mesh = new THREE.Group()
   const typeName = shipType.name ? shipType.name.toUpperCase() : 'NORMAL'
-  const isRammer = typeName.includes('RAMMER')
-  const isBig = typeName.includes('GALLEON') || shipType.size > 1.4
+  if (typeName.includes('RAMMER')) {
+    return createCorsairRammerMesh(1.5)
+  } else if (typeName.includes('GALLEON') || shipType.size > 1.4) {
+    return createNavalManOfWarMesh(1.8)
+  } else {
+    return createNavalSloopMesh(1.4)
+  }
+}
 
-  const sizeScale = isBig ? 1.8 : (isRammer ? 1.4 : 1.3)
+/**
+ * 1. Royal Navy Sloop-of-War / Corvette (Normal Enemy)
+ */
+function createNavalSloopMesh(scale: number): THREE.Group {
+  const mesh = new THREE.Group()
 
-  // Wood & Trim Materials
-  const woodColor = isRammer ? 0x221a14 : (isBig ? 0x3d2314 : 0x5c3317)
-  const woodMat = new THREE.MeshPhongMaterial({ color: woodColor })
-  const deckMat = new THREE.MeshPhongMaterial({ color: 0xc4a47c })
-  const railMat = new THREE.MeshPhongMaterial({ color: 0x1f140b })
-  const mastMat = new THREE.MeshPhongMaterial({ color: 0x3d2314 })
+  // Royal Navy Paint Scheme: Navy Blue Upper Hull, White Waterline, Gold Accents
+  const darkHullMat = new THREE.MeshPhongMaterial({ color: 0x0c1b33 }) // Royal Navy Blue
+  const deckMat = new THREE.MeshPhongMaterial({ color: 0xd4b58c })
+  const whiteStripeMat = new THREE.MeshPhongMaterial({ color: 0xf5f5f5 })
   const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.3 })
-  const ironMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.5 })
+  const mastMat = new THREE.MeshPhongMaterial({ color: 0x3d2314 })
+  const ironMat = new THREE.MeshStandardMaterial({ color: 0x1f1f1f, metalness: 0.7, roughness: 0.4 })
+  const railMat = new THREE.MeshPhongMaterial({ color: 0x18120c })
 
-  // Emblem Sail Texture
-  const sailType = isRammer ? 'rammer' : (isBig ? 'galleon' : 'sloop')
-  const sailTexture = getSailTexture(sailType)
-  const sailMat = new THREE.MeshPhongMaterial({
-    map: sailTexture,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.95
-  })
+  const sailTexture = getSailTexture('sloop')
+  const sailMat = new THREE.MeshPhongMaterial({ map: sailTexture, side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
 
-  // === 1. HULL STRUCTURE ===
+  // Swept Hull
   const hullShape = new THREE.Shape()
-  hullShape.moveTo(-2.2 * sizeScale, -6.0 * sizeScale)
-  hullShape.lineTo(2.2 * sizeScale, -6.0 * sizeScale)
-  hullShape.lineTo(2.6 * sizeScale, 0)
-  hullShape.lineTo(2.0 * sizeScale, 5.0 * sizeScale)
-  hullShape.lineTo(0.0, 7.0 * sizeScale) // Bow tip
-  hullShape.lineTo(-2.0 * sizeScale, 5.0 * sizeScale)
-  hullShape.lineTo(-2.6 * sizeScale, 0)
+  hullShape.moveTo(-2.4 * scale, -6.5 * scale)
+  hullShape.lineTo(2.4 * scale, -6.5 * scale)
+  hullShape.lineTo(2.8 * scale, 0)
+  hullShape.lineTo(2.2 * scale, 5.5 * scale)
+  hullShape.lineTo(0.0, 7.5 * scale)
+  hullShape.lineTo(-2.2 * scale, 5.5 * scale)
+  hullShape.lineTo(-2.8 * scale, 0)
   hullShape.closePath()
 
-  const extrudeSettings = { depth: 2.8 * sizeScale, bevelEnabled: true, bevelThickness: 0.3, bevelSize: 0.2, bevelSegments: 2 }
-  const hullGeom = new THREE.ExtrudeGeometry(hullShape, extrudeSettings)
-  const hullMat = new THREE.MeshPhongMaterial({ color: shipType.color || woodColor })
-  const hull = new THREE.Mesh(hullGeom, hullMat)
+  const hullGeom = new THREE.ExtrudeGeometry(hullShape, { depth: 3.0 * scale, bevelEnabled: true, bevelThickness: 0.3, bevelSize: 0.2, bevelSegments: 2 })
+  const hull = new THREE.Mesh(hullGeom, darkHullMat)
   hull.rotation.x = -Math.PI / 2
-  hull.position.y = 0.6 * sizeScale
+  hull.position.y = 0.7 * scale
   mesh.add(hull)
 
-  // Main Deck
-  const deckGeom = new THREE.BoxGeometry(4.4 * sizeScale, 0.3 * sizeScale, 11.0 * sizeScale)
-  const deck = new THREE.Mesh(deckGeom, deckMat)
-  deck.position.set(0, 3.0 * sizeScale, 0)
+  // White Waterline Stripe
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(5.2 * scale, 0.3 * scale, 13.0 * scale), whiteStripeMat)
+  stripe.position.set(0, 2.0 * scale, 0)
+  mesh.add(stripe)
+
+  // Main Deck & Raised Cabin
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(4.8 * scale, 0.3 * scale, 12.0 * scale), deckMat)
+  deck.position.set(0, 3.1 * scale, 0)
   mesh.add(deck)
 
-  // === 2. DISTINCT FACTION FEATURES ===
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(4.4 * scale, 1.2 * scale, 4.0 * scale), darkHullMat)
+  cabin.position.set(0, 3.8 * scale, -4.0 * scale)
+  mesh.add(cabin)
+
+  // Gold Lion Figurehead at Bow
+  const figurehead = new THREE.Mesh(new THREE.ConeGeometry(0.4 * scale, 1.8 * scale, 6), goldMat)
+  figurehead.rotation.x = Math.PI / 3
+  figurehead.position.set(0, 3.2 * scale, 7.2 * scale)
+  mesh.add(figurehead)
+
+  // 6 Mounted Side Cannons
   const portCannons: any[] = []
   const starboardCannons: any[] = []
+  const sideCannonGeom = new THREE.CylinderGeometry(0.18 * scale, 0.24 * scale, 1.5 * scale, 8)
 
-  if (isRammer) {
-    // === CORSAIR RAMMER: Heavy iron plating & lethal spiked ramming beak ===
-    const armorPlateMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.85, roughness: 0.3 })
-    for (let side = -1; side <= 1; side += 2) {
-      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.2 * sizeScale, 8.0 * sizeScale), armorPlateMat)
-      plate.position.set(side * 2.3 * sizeScale, 2.2 * sizeScale, 0)
-      mesh.add(plate)
-    }
-
-    // Heavy Spiked Ramming Beak at Bow
-    const ramSpike = new THREE.Mesh(
-      new THREE.ConeGeometry(0.6 * sizeScale, 5.0 * sizeScale, 8),
-      new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.2 })
-    )
-    ramSpike.rotation.x = -Math.PI / 2
-    ramSpike.position.set(0, 1.5 * sizeScale, 8.5 * sizeScale)
-    mesh.add(ramSpike)
-
-    // Side Spikes
-    for (let side = -1; side <= 1; side += 2) {
-      const sSpike = new THREE.Mesh(new THREE.ConeGeometry(0.3 * sizeScale, 2.0 * sizeScale, 6), armorPlateMat)
-      sSpike.rotation.z = -side * Math.PI / 2
-      sSpike.position.set(side * 2.4 * sizeScale, 1.8 * sizeScale, 6.0 * sizeScale)
-      mesh.add(sSpike)
-    }
-
-    // 2 Heavy Side Cannons
-    for (let side = -1; side <= 1; side += 2) {
-      const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, 1.5 * sizeScale), ironMat)
+  for (let side = -1; side <= 1; side += 2) {
+    for (let c = -1.8; c <= 1.8; c += 1.8) {
+      const cannon = new THREE.Mesh(sideCannonGeom, ironMat)
       cannon.rotation.z = side * Math.PI / 2
-      cannon.position.set(side * 2.5 * sizeScale, 2.5 * sizeScale, 0)
+      cannon.position.set(side * 2.6 * scale, 2.5 * scale, c * scale)
       mesh.add(cannon)
-      if (side === -1) portCannons.push({ mesh: cannon, zOffset: 0, sideSign: -1 })
-      else starboardCannons.push({ mesh: cannon, zOffset: 0, sideSign: 1 })
-    }
-  } else if (isBig) {
-    // === IMPERIAL GALLEON: High multi-tiered stern castle & double deck gun ports ===
-    const sternCastle = new THREE.Mesh(new THREE.BoxGeometry(4.2 * sizeScale, 2.2 * sizeScale, 4.5 * sizeScale), woodMat)
-    sternCastle.position.set(0, 4.2 * sizeScale, -3.8 * sizeScale)
-    mesh.add(sternCastle)
-
-    // Triple Stern Lanterns
-    for (let l = -1.2; l <= 1.2; l += 1.2) {
-      const lantern = new THREE.Mesh(new THREE.CylinderGeometry(0.2 * sizeScale, 0.2 * sizeScale, 0.6 * sizeScale), goldMat)
-      lantern.position.set(l * sizeScale, 5.2 * sizeScale, -6.1 * sizeScale)
-      mesh.add(lantern)
-    }
-
-    // 6 Side Cannons per side (Double Deck feel)
-    for (let side = -1; side <= 1; side += 2) {
-      for (let c = -2; c <= 2; c += 2) {
-        const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 1.4 * sizeScale), ironMat)
-        cannon.rotation.z = side * Math.PI / 2
-        cannon.position.set(side * 2.5 * sizeScale, 2.4 * sizeScale, c * 1.5 * sizeScale)
-        mesh.add(cannon)
-        if (side === -1) portCannons.push({ mesh: cannon, zOffset: c * 1.5 * sizeScale, sideSign: -1 })
-        else starboardCannons.push({ mesh: cannon, zOffset: c * 1.5 * sizeScale, sideSign: 1 })
-      }
-    }
-  } else {
-    // === ROYAL NAVY SLOOP: Sleek 2-masted vessel with sharp clipper bow ===
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(3.2 * sizeScale, 1.0 * sizeScale, 3.0 * sizeScale), woodMat)
-    cabin.position.set(0, 3.5 * sizeScale, -3.5 * sizeScale)
-    mesh.add(cabin)
-
-    // 4 Side Cannons
-    for (let side = -1; side <= 1; side += 2) {
-      for (let c = -1; c <= 1; c += 2) {
-        const cannon = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.3 * sizeScale), ironMat)
-        cannon.rotation.z = side * Math.PI / 2
-        cannon.position.set(side * 2.4 * sizeScale, 2.4 * sizeScale, c * 1.8 * sizeScale)
-        mesh.add(cannon)
-        if (side === -1) portCannons.push({ mesh: cannon, zOffset: c * 1.8 * sizeScale, sideSign: -1 })
-        else starboardCannons.push({ mesh: cannon, zOffset: c * 1.8 * sizeScale, sideSign: 1 })
-      }
+      if (side === -1) portCannons.push({ mesh: cannon, zOffset: c * scale, sideSign: -1 })
+      else starboardCannons.push({ mesh: cannon, zOffset: c * scale, sideSign: 1 })
     }
   }
 
   mesh.userData.portCannons = portCannons
   mesh.userData.starboardCannons = starboardCannons
 
-  // === 3. MASTS & SAILS ===
+  // Masts & Rigging
   const sails: THREE.Mesh[] = []
 
-  const mainMast = new THREE.Mesh(new THREE.CylinderGeometry(0.28 * sizeScale, 0.35 * sizeScale, 14 * sizeScale, 8), mastMat)
-  mainMast.position.set(0, 9.0 * sizeScale, 0)
+  const mainMast = new THREE.Mesh(new THREE.CylinderGeometry(0.3 * scale, 0.4 * scale, 15 * scale, 8), mastMat)
+  mainMast.position.set(0, 9.5 * scale, -0.5 * scale)
   mesh.add(mainMast)
 
-  // Yard 1 (Upper)
-  const yard1 = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * sizeScale, 0.08 * sizeScale, 7.5 * sizeScale, 8), mastMat)
-  yard1.rotation.z = Math.PI / 2
-  yard1.position.set(0, 13.5 * sizeScale, 0)
-  mesh.add(yard1)
+  const foreMast = new THREE.Mesh(new THREE.CylinderGeometry(0.25 * scale, 0.35 * scale, 12 * scale, 8), mastMat)
+  foreMast.position.set(0, 8.0 * scale, 3.5 * scale)
+  mesh.add(foreMast)
 
-  const sail1Geom = new THREE.PlaneGeometry(7.0 * sizeScale, 6.0 * sizeScale, 10, 10)
-  const mainSail = new THREE.Mesh(sail1Geom, sailMat)
-  mainSail.position.set(0, 10.5 * sizeScale, 0.05)
+  const bowsprit = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * scale, 0.25 * scale, 7 * scale, 8), mastMat)
+  bowsprit.rotation.x = Math.PI / 4
+  bowsprit.position.set(0, 4.0 * scale, 8.5 * scale)
+  mesh.add(bowsprit)
+
+  // Sails
+  const mainSailGeom = new THREE.PlaneGeometry(7.5 * scale, 7.0 * scale, 10, 10)
+  const mainSail = new THREE.Mesh(mainSailGeom, sailMat)
+  mainSail.position.set(0, 10.5 * scale, -0.45 * scale)
   mainSail.userData.isSail = true
-  mainSail.userData.originalVertices = sail1Geom.attributes.position.array.slice()
+  mainSail.userData.originalVertices = mainSailGeom.attributes.position.array.slice()
   mainSail.userData.fixedEdges = []
-  for (let i = 0; i < sail1Geom.attributes.position.count; i++) {
-    const y = sail1Geom.attributes.position.getY(i)
-    mainSail.userData.fixedEdges.push(Math.abs(y - 3.0 * sizeScale) < 0.1 || Math.abs(y + 3.0 * sizeScale) < 0.1)
+  for (let i = 0; i < mainSailGeom.attributes.position.count; i++) {
+    const y = mainSailGeom.attributes.position.getY(i)
+    mainSail.userData.fixedEdges.push(Math.abs(y - 3.5 * scale) < 0.1 || Math.abs(y + 3.5 * scale) < 0.1)
   }
   mesh.add(mainSail)
   sails.push(mainSail)
 
-  // Fore Mast
-  const foreMast = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * sizeScale, 0.28 * sizeScale, 10 * sizeScale, 8), mastMat)
-  foreMast.position.set(0, 7.0 * sizeScale, 3.5 * sizeScale)
-  mesh.add(foreMast)
-
-  const foreYard = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * sizeScale, 0.07 * sizeScale, 5.5 * sizeScale, 8), mastMat)
-  foreYard.rotation.z = Math.PI / 2
-  foreYard.position.set(0, 10.5 * sizeScale, 3.5 * sizeScale)
-  mesh.add(foreYard)
-
-  const sail2Geom = new THREE.PlaneGeometry(5.0 * sizeScale, 4.5 * sizeScale, 8, 8)
-  const foreSail = new THREE.Mesh(sail2Geom, sailMat)
-  foreSail.position.set(0, 8.0 * sizeScale, 3.55 * sizeScale)
+  const foreSailGeom = new THREE.PlaneGeometry(5.5 * scale, 5.0 * scale, 8, 8)
+  const foreSail = new THREE.Mesh(foreSailGeom, sailMat)
+  foreSail.position.set(0, 8.5 * scale, 3.55 * scale)
   foreSail.userData.isSail = true
-  foreSail.userData.originalVertices = sail2Geom.attributes.position.array.slice()
+  foreSail.userData.originalVertices = foreSailGeom.attributes.position.array.slice()
   foreSail.userData.fixedEdges = []
-  for (let i = 0; i < sail2Geom.attributes.position.count; i++) {
-    const y = sail2Geom.attributes.position.getY(i)
-    foreSail.userData.fixedEdges.push(Math.abs(y - 2.25 * sizeScale) < 0.1 || Math.abs(y + 2.25 * sizeScale) < 0.1)
+  for (let i = 0; i < foreSailGeom.attributes.position.count; i++) {
+    const y = foreSailGeom.attributes.position.getY(i)
+    foreSail.userData.fixedEdges.push(Math.abs(y - 2.5 * scale) < 0.1 || Math.abs(y + 2.5 * scale) < 0.1)
   }
   mesh.add(foreSail)
   sails.push(foreSail)
 
   mesh.userData.sails = sails
 
-  // Faction Flag on Main Topmast
-  const flagColor = isRammer ? 0xb30000 : (isBig ? 0xd4af37 : 0x0a2351)
-  const flagMat = new THREE.MeshBasicMaterial({ color: flagColor, side: THREE.DoubleSide })
-  const flag = new THREE.Mesh(new THREE.PlaneGeometry(2.0 * sizeScale, 1.2 * sizeScale), flagMat)
-  flag.position.set(0, 15 * sizeScale, 0)
-  flag.rotation.y = Math.PI / 2
-  mesh.add(flag)
+  // Royal Navy Flag at Masthead
+  const ensignTex = getRoyalNavalEnsignTexture()
+  const flagMat = new THREE.MeshPhongMaterial({ map: ensignTex, side: THREE.DoubleSide })
+  const flagMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.4 * scale, 1.4 * scale, 8, 4), flagMat)
+  flagMesh.position.set(1.2 * scale, 16.5 * scale, -0.5 * scale)
+  flagMesh.rotation.y = Math.PI / 2
+  mesh.add(flagMesh)
+  mesh.userData.flagMesh = flagMesh
+
+  return mesh
+}
+
+/**
+ * 2. Heavy Royal Naval Man-o'-War (Big Enemy)
+ */
+function createNavalManOfWarMesh(scale: number): THREE.Group {
+  const mesh = new THREE.Group()
+
+  // First-Rate Line of Battle Colors: Black & Yellow Nelson Checker Striping
+  const blackHullMat = new THREE.MeshPhongMaterial({ color: 0x141414 })
+  const yellowStripeMat = new THREE.MeshPhongMaterial({ color: 0xd4a017 })
+  const deckMat = new THREE.MeshPhongMaterial({ color: 0xbf9b73 })
+  const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.25 })
+  const mastMat = new THREE.MeshPhongMaterial({ color: 0x331c10 })
+  const ironMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.4 })
+
+  const sailTexture = getSailTexture('galleon')
+  const sailMat = new THREE.MeshPhongMaterial({ map: sailTexture, side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
+
+  // Massive Swept Hull
+  const hullShape = new THREE.Shape()
+  hullShape.moveTo(-3.0 * scale, -8.0 * scale)
+  hullShape.lineTo(3.0 * scale, -8.0 * scale)
+  hullShape.lineTo(3.6 * scale, -1.0)
+  hullShape.lineTo(3.0 * scale, 6.0 * scale)
+  hullShape.lineTo(0.0, 8.5 * scale)
+  hullShape.lineTo(-3.0 * scale, 6.0 * scale)
+  hullShape.lineTo(-3.6 * scale, -1.0)
+  hullShape.closePath()
+
+  const hullGeom = new THREE.ExtrudeGeometry(hullShape, { depth: 3.8 * scale, bevelEnabled: true, bevelThickness: 0.4, bevelSize: 0.3, bevelSegments: 3 })
+  const hull = new THREE.Mesh(hullGeom, blackHullMat)
+  hull.rotation.x = -Math.PI / 2
+  hull.position.y = 0.8 * scale
+  mesh.add(hull)
+
+  // Nelson Checker Stripes
+  const stripe1 = new THREE.Mesh(new THREE.BoxGeometry(6.8 * scale, 0.4 * scale, 15.5 * scale), yellowStripeMat)
+  stripe1.position.set(0, 2.2 * scale, -0.2 * scale)
+  mesh.add(stripe1)
+
+  const stripe2 = new THREE.Mesh(new THREE.BoxGeometry(6.6 * scale, 0.4 * scale, 14.5 * scale), yellowStripeMat)
+  stripe2.position.set(0, 3.4 * scale, -0.2 * scale)
+  mesh.add(stripe2)
+
+  // Multi-tier Deck & High Stern Castle
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(6.2 * scale, 0.4 * scale, 14.5 * scale), deckMat)
+  deck.position.set(0, 4.0 * scale, 0)
+  mesh.add(deck)
+
+  const sternCastle = new THREE.Mesh(new THREE.BoxGeometry(5.8 * scale, 2.4 * scale, 5.5 * scale), blackHullMat)
+  sternCastle.position.set(0, 5.2 * scale, -5.2 * scale)
+  mesh.add(sternCastle)
+
+  // Triple Stern Lanterns
+  for (let l = -1.8; l <= 1.8; l += 1.8) {
+    const lantern = new THREE.Mesh(new THREE.CylinderGeometry(0.25 * scale, 0.2 * scale, 0.8 * scale, 8), goldMat)
+    lantern.position.set(l * scale, 6.6 * scale, -8.0 * scale)
+    mesh.add(lantern)
+  }
+
+  // 12 Double Deck Mounted Cannons
+  const portCannons: any[] = []
+  const starboardCannons: any[] = []
+  const sideCannonGeom = new THREE.CylinderGeometry(0.2 * scale, 0.28 * scale, 1.8 * scale, 8)
+
+  for (let side = -1; side <= 1; side += 2) {
+    for (let c = -2.5; c <= 2.5; c += 1.6) {
+      const cannonLower = new THREE.Mesh(sideCannonGeom, ironMat)
+      cannonLower.rotation.z = side * Math.PI / 2
+      cannonLower.position.set(side * 3.4 * scale, 2.2 * scale, c * scale)
+      mesh.add(cannonLower)
+
+      const cannonUpper = new THREE.Mesh(sideCannonGeom, ironMat)
+      cannonUpper.rotation.z = side * Math.PI / 2
+      cannonUpper.position.set(side * 3.3 * scale, 3.4 * scale, c * scale)
+      mesh.add(cannonUpper)
+
+      if (side === -1) portCannons.push({ mesh: cannonUpper, zOffset: c * scale, sideSign: -1 })
+      else starboardCannons.push({ mesh: cannonUpper, zOffset: c * scale, sideSign: 1 })
+    }
+  }
+
+  mesh.userData.portCannons = portCannons
+  mesh.userData.starboardCannons = starboardCannons
+
+  // 3 Rigged Masts
+  const sails: THREE.Mesh[] = []
+
+  const mainMast = new THREE.Mesh(new THREE.CylinderGeometry(0.38 * scale, 0.5 * scale, 19 * scale, 10), mastMat)
+  mainMast.position.set(0, 12.5 * scale, -0.5 * scale)
+  mesh.add(mainMast)
+
+  const foreMast = new THREE.Mesh(new THREE.CylinderGeometry(0.32 * scale, 0.42 * scale, 16 * scale, 10), mastMat)
+  foreMast.position.set(0, 11.0 * scale, 4.5 * scale)
+  mesh.add(foreMast)
+
+  const mizzenMast = new THREE.Mesh(new THREE.CylinderGeometry(0.28 * scale, 0.36 * scale, 13 * scale, 10), mastMat)
+  mizzenMast.position.set(0, 9.5 * scale, -5.2 * scale)
+  mesh.add(mizzenMast)
+
+  // Sails
+  const mainSailGeom = new THREE.PlaneGeometry(9.0 * scale, 8.5 * scale, 12, 12)
+  const mainSail = new THREE.Mesh(mainSailGeom, sailMat)
+  mainSail.position.set(0, 13.0 * scale, -0.45 * scale)
+  mainSail.userData.isSail = true
+  mainSail.userData.originalVertices = mainSailGeom.attributes.position.array.slice()
+  mainSail.userData.fixedEdges = []
+  for (let i = 0; i < mainSailGeom.attributes.position.count; i++) {
+    const y = mainSailGeom.attributes.position.getY(i)
+    mainSail.userData.fixedEdges.push(Math.abs(y - 4.25 * scale) < 0.1 || Math.abs(y + 4.25 * scale) < 0.1)
+  }
+  mesh.add(mainSail)
+  sails.push(mainSail)
+
+  const foreSailGeom = new THREE.PlaneGeometry(7.0 * scale, 6.5 * scale, 10, 10)
+  const foreSail = new THREE.Mesh(foreSailGeom, sailMat)
+  foreSail.position.set(0, 11.0 * scale, 4.55 * scale)
+  foreSail.userData.isSail = true
+  foreSail.userData.originalVertices = foreSailGeom.attributes.position.array.slice()
+  foreSail.userData.fixedEdges = []
+  for (let i = 0; i < foreSailGeom.attributes.position.count; i++) {
+    const y = foreSailGeom.attributes.position.getY(i)
+    foreSail.userData.fixedEdges.push(Math.abs(y - 3.25 * scale) < 0.1 || Math.abs(y + 3.25 * scale) < 0.1)
+  }
+  mesh.add(foreSail)
+  sails.push(foreSail)
+
+  mesh.userData.sails = sails
+
+  // Royal Navy Flag at Main Topmast
+  const ensignTex = getRoyalNavalEnsignTexture()
+  const flagMat = new THREE.MeshPhongMaterial({ map: ensignTex, side: THREE.DoubleSide })
+  const flagMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.0 * scale, 1.8 * scale, 10, 5), flagMat)
+  flagMesh.position.set(1.5 * scale, 21.5 * scale, -0.5 * scale)
+  flagMesh.rotation.y = Math.PI / 2
+  mesh.add(flagMesh)
+  mesh.userData.flagMesh = flagMesh
+
+  return mesh
+}
+
+/**
+ * 3. Corsair Ironclad Rammer (Rammer Enemy)
+ */
+function createCorsairRammerMesh(scale: number): THREE.Group {
+  const mesh = new THREE.Group()
+
+  const darkWoodMat = new THREE.MeshPhongMaterial({ color: 0x1f1914 })
+  const deckMat = new THREE.MeshPhongMaterial({ color: 0x8a735c })
+  const armorMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.85, roughness: 0.3 })
+  const ironMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.2 })
+  const mastMat = new THREE.MeshPhongMaterial({ color: 0x2b1c12 })
+
+  const sailTexture = getSailTexture('rammer')
+  const sailMat = new THREE.MeshPhongMaterial({ map: sailTexture, side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
+
+  // Low-slung Heavy Hull
+  const hullShape = new THREE.Shape()
+  hullShape.moveTo(-2.5 * scale, -6.5 * scale)
+  hullShape.lineTo(2.5 * scale, -6.5 * scale)
+  hullShape.lineTo(2.8 * scale, 0)
+  hullShape.lineTo(2.2 * scale, 5.5 * scale)
+  hullShape.lineTo(0.0, 7.8 * scale)
+  hullShape.lineTo(-2.2 * scale, 5.5 * scale)
+  hullShape.lineTo(-2.8 * scale, 0)
+  hullShape.closePath()
+
+  const hullGeom = new THREE.ExtrudeGeometry(hullShape, { depth: 3.0 * scale, bevelEnabled: true, bevelThickness: 0.3, bevelSize: 0.2, bevelSegments: 2 })
+  const hull = new THREE.Mesh(hullGeom, darkWoodMat)
+  hull.rotation.x = -Math.PI / 2
+  hull.position.y = 0.6 * scale
+  mesh.add(hull)
+
+  // Iron Armor Straps Along Waterline
+  for (let side = -1; side <= 1; side += 2) {
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.25 * scale, 1.2 * scale, 9.0 * scale), armorMat)
+    plate.position.set(side * 2.5 * scale, 2.2 * scale, 0)
+    mesh.add(plate)
+  }
+
+  // Lethal Spiked Iron Ramming Beak at Bow
+  const ramSpike = new THREE.Mesh(
+    new THREE.ConeGeometry(0.75 * scale, 6.0 * scale, 8),
+    ironMat
+  )
+  ramSpike.rotation.x = -Math.PI / 2
+  ramSpike.position.set(0, 1.6 * scale, 9.5 * scale)
+  mesh.add(ramSpike)
+
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(5.0 * scale, 0.3 * scale, 12.0 * scale), deckMat)
+  deck.position.set(0, 3.1 * scale, 0)
+  mesh.add(deck)
+
+  // Mounted Cannons
+  const portCannons: any[] = []
+  const starboardCannons: any[] = []
+  const sideCannonGeom = new THREE.CylinderGeometry(0.2 * scale, 0.28 * scale, 1.6 * scale, 8)
+
+  for (let side = -1; side <= 1; side += 2) {
+    const cannon = new THREE.Mesh(sideCannonGeom, ironMat)
+    cannon.rotation.z = side * Math.PI / 2
+    cannon.position.set(side * 2.6 * scale, 2.5 * scale, 0)
+    mesh.add(cannon)
+    if (side === -1) portCannons.push({ mesh: cannon, zOffset: 0, sideSign: -1 })
+    else starboardCannons.push({ mesh: cannon, zOffset: 0, sideSign: 1 })
+  }
+
+  mesh.userData.portCannons = portCannons
+  mesh.userData.starboardCannons = starboardCannons
+
+  // Rigging & Masts
+  const sails: THREE.Mesh[] = []
+
+  const mainMast = new THREE.Mesh(new THREE.CylinderGeometry(0.3 * scale, 0.4 * scale, 14 * scale, 8), mastMat)
+  mainMast.position.set(0, 9.0 * scale, 0)
+  mesh.add(mainMast)
+
+  const mainSailGeom = new THREE.PlaneGeometry(7.5 * scale, 6.5 * scale, 10, 10)
+  const mainSail = new THREE.Mesh(mainSailGeom, sailMat)
+  mainSail.position.set(0, 10.0 * scale, 0.05)
+  mainSail.userData.isSail = true
+  mainSail.userData.originalVertices = mainSailGeom.attributes.position.array.slice()
+  mainSail.userData.fixedEdges = []
+  for (let i = 0; i < mainSailGeom.attributes.position.count; i++) {
+    const y = mainSailGeom.attributes.position.getY(i)
+    mainSail.userData.fixedEdges.push(Math.abs(y - 3.25 * scale) < 0.1 || Math.abs(y + 3.25 * scale) < 0.1)
+  }
+  mesh.add(mainSail)
+  sails.push(mainSail)
+
+  mesh.userData.sails = sails
+
+  // Corsair Flag
+  const flagMat = new THREE.MeshBasicMaterial({ color: 0xb30000, side: THREE.DoubleSide })
+  const flagMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.5 * scale, 1.4 * scale, 8, 4), flagMat)
+  flagMesh.position.set(1.25 * scale, 15.5 * scale, 0)
+  flagMesh.rotation.y = Math.PI / 2
+  mesh.add(flagMesh)
+  mesh.userData.flagMesh = flagMesh
 
   return mesh
 }

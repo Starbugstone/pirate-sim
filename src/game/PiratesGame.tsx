@@ -1923,8 +1923,19 @@ function animateSails(dt) {
     })
   }
 
-  // 3. Animate AI enemy ship sails
+  // 3. Animate AI enemy ship sails & topmast flags
   enemyShipMeshes.forEach(mesh => {
+    if (mesh && mesh.userData.flagMesh) {
+      const flagMesh = mesh.userData.flagMesh
+      const positions = flagMesh.geometry.attributes.position
+      for (let i = 0; i < positions.count; i++) {
+        const x = positions.getX(i)
+        const wave = Math.sin(time * 12 - x * 4) * 0.15 * Math.max(0, x)
+        positions.setZ(i, wave)
+      }
+      positions.needsUpdate = true
+    }
+
     if (mesh && mesh.userData.sails) {
       mesh.userData.sails.forEach(sail => {
         if (!sail.userData.originalVertices || !sail.userData.fixedEdges) return

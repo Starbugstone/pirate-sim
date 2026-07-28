@@ -1081,7 +1081,8 @@ export function updateShipBuoyancy(
   time: number,
   dt: number,
   length = 12,
-  beam = 5
+  beam = 5,
+  draft = 0.25
 ) {
   const sinA = Math.sin(heading)
   const cosA = Math.cos(heading)
@@ -1105,7 +1106,7 @@ export function updateShipBuoyancy(
   )
 
   const bowLift = Math.min(0.8, speed * 0.05)
-  const targetY = avgY - 0.25 + bowLift * 0.2
+  const targetY = avgY - draft + bowLift * 0.2
 
   const wavePitch = Math.atan2(pBow.y - pStern.y, length)
   const targetPitch = wavePitch * 1.18 - bowLift * 0.065

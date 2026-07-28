@@ -2514,7 +2514,8 @@ function update(dt) {
     oceanTime,
     dt,
     14,
-    6
+    6,
+    0.72
   )
 
   // Update ocean island & boulder shore foam list periodically

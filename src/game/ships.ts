@@ -66,7 +66,7 @@ export function createPlayerShip(): THREE.Group {
   crosstree.position.set(0, 12.5, 0)
   ship.add(crosstree)
 
-  const nestGeom = new THREE.CylinderGeometry(0.5, 0.6, 0.4, 8, 1, true)
+  const nestGeom = new THREE.CylinderGeometry(0.5, 0.6, 0.4, 8, 1, false)
   const nest = new THREE.Mesh(nestGeom, railMaterial)
   nest.position.set(0, 13, 0)
   ship.add(nest)

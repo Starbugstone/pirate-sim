@@ -193,8 +193,8 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number, forcedArch
     const localZ = Math.sin(angle) * dist
     const groundY = islandData.heightmapFn(localX, localZ)
 
-    // Only plant trees between y = 0.8 (above water line) and y = 30.0 (below high volcanic peaks)
-    if (groundY >= 0.8 && groundY <= 30.0) {
+    // Only plant trees between y = 0.8 (above water line) and y = 65.0 (below high volcanic peaks)
+    if (groundY >= 0.8 && groundY <= 65.0) {
       const palmScale = 0.8 + Math.random() * 0.5
       const tree = createDetailedPalmTree(palmScale)
       tree.position.set(localX, groundY, localZ)
@@ -290,6 +290,23 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number, forcedArch
     }
   }
 
+  // ── Place 3D Coral Reef Clusters underwater around shallow island perimeter ──
+  const numCorals = Math.floor(8 + radius * 0.12)
+  for (let c = 0; c < numCorals; c++) {
+    const cAngle = Math.random() * Math.PI * 2
+    const cDist = radius * (0.75 + Math.random() * 0.2)
+    const cx = Math.cos(cAngle) * cDist
+    const cz = Math.sin(cAngle) * cDist
+    const cy = islandData.heightmapFn(cx, cz)
+
+    if (cy <= 0.2 && cy >= -6.0) {
+      const coralCluster = createCoralReefCluster()
+      coralCluster.position.set(cx, Math.max(-4.5, cy), cz)
+      coralCluster.rotation.y = Math.random() * Math.PI * 2
+      islandGroup.add(coralCluster)
+    }
+  }
+
   islandGroup.position.set(x, 0, z)
   scene.add(islandGroup)
 
@@ -327,38 +344,64 @@ export function spawnRock(scene: THREE.Scene, x: number, z: number) {
     polygonOffsetUnits: -1.5
   })
 
-  // Helper to create deformed rock mesh
+  // Helper to create organic bulky rock mesh with rounded weathered top & flared underwater footing
   const createRockMesh = (r: number, scaleY: number, noiseAmp: number) => {
-    const geom = new THREE.IcosahedronGeometry(r, 2)
+    const height = r * scaleY * 1.5
+    const geom = new THREE.CylinderGeometry(r * 0.88, r * 1.30, height, 20, 24)
     const posAttr = geom.attributes.position
     const seed = Math.random() * 1000
 
+    const halfH = height * 0.5
     for (let i = 0; i < posAttr.count; i++) {
-      const vx = posAttr.getX(i)
-      const vy = posAttr.getY(i)
-      const vz = posAttr.getZ(i)
-      const n = fbm(vx * 0.1 + seed, vz * 0.1 + seed, 3) * noiseAmp
-      const dist = Math.sqrt(vx * vx + vy * vy + vz * vz)
-      const factor = dist > 0.0001 ? 1.0 + (n / dist) : 1.0
-      posAttr.setXYZ(i, vx * factor, vy * factor * scaleY, vz * factor)
+      let vx = posAttr.getX(i)
+      let vy = posAttr.getY(i)
+      let vz = posAttr.getZ(i)
+
+      const normY = vy / halfH // -1.0 at bottom base, +1.0 at top rim
+
+      // Multi-octave 3D noise for organic rocky ledges
+      const n1 = fbm(vx * 0.07 + seed, vy * 0.07 + seed, 4) * noiseAmp * 1.8
+      const n2 = fbm(vz * 0.10 + seed, vy * 0.09 + seed, 3) * noiseAmp * 1.5
+      
+      // Bulging lower cliff footing & flared underwater base (vy < 0)
+      const baseFlare = vy < 0 ? 1.0 + Math.pow(Math.abs(vy) / halfH, 1.3) * 0.45 : 1.0
+      
+      // Weathered Rounded Dome Top (prevents cone spikes, creates rounded worn table top)
+      let topDome = 1.0
+      if (normY > 0.25) {
+        const topRatio = (normY - 0.25) / 0.75 // 0.0 to 1.0 at top cap
+        topDome = Math.cos(topRatio * Math.PI * 0.48) // Curves smoothly into rounded worn top
+        vy -= Math.pow(topRatio, 2.0) * (height * 0.12) // Slightly depresses & rounds top center
+      }
+
+      vx = (vx + (isNaN(n1) ? 0 : n1)) * baseFlare * topDome
+      vz = (vz + (isNaN(n2) ? 0 : n2)) * baseFlare * topDome
+
+      if (isNaN(vx)) vx = 0
+      if (isNaN(vy)) vy = 0
+      if (isNaN(vz)) vz = 0
+
+      posAttr.setXYZ(i, vx, vy, vz)
     }
 
     geom.computeVertexNormals()
+    geom.computeBoundingSphere()
+    geom.computeBoundingBox()
     const normAttr = geom.attributes.normal
 
     const colors: number[] = []
-    const wetStone = new THREE.Color(0x282320)
-    const cliffStone = new THREE.Color(0x564e47)
-    const mossGreen = new THREE.Color(0x3a562d)
+    const wetStone = new THREE.Color(0x24201d)   // Dark wet shoreline stone
+    const cliffStone = new THREE.Color(0x524a44) // Volcanic gray rock cliff
+    const mossGreen = new THREE.Color(0x38522b)  // Mossy green ledge top
 
     for (let i = 0; i < posAttr.count; i++) {
       const vy = posAttr.getY(i)
       const ny = normAttr.getY(i)
       const vColor = new THREE.Color()
 
-      if (vy <= 0.3) {
+      if (vy <= 0.5) {
         vColor.copy(wetStone)
-      } else if (ny > 0.62 && vy > 3.0) {
+      } else if (ny > 0.55 && vy > 2.0) {
         vColor.copy(mossGreen)
       } else {
         vColor.copy(cliffStone)
@@ -375,52 +418,91 @@ export function spawnRock(scene: THREE.Scene, x: number, z: number) {
     return mesh
   }
 
-  // 1. Central Towering Sea Stack Pinnacle (Height 35 - 55 units!)
-  const mainHeightScale = 2.2 + Math.random() * 1.4
-  const mainRock = createRockMesh(rockRadius, mainHeightScale, 4.0)
-  mainRock.position.y = -rockRadius * 0.2
+  // 1. Central Towering Bulky Sea Stack Pinnacle
+  const mainHeightScale = 1.8 + Math.random() * 1.0
+  const mainRock = createRockMesh(rockRadius, mainHeightScale, 3.5)
+  mainRock.position.y = (rockRadius * mainHeightScale * 2.0) * 0.25 - 5.0
   mainRock.rotation.y = Math.random() * Math.PI * 2
   rockGroup.add(mainRock)
 
-  // 2. Asymmetric Sea Cove Side Buttress Cliffs (1-2 attached cliff ledges)
-  const numButtresses = 1 + Math.floor(Math.random() * 2)
+  // 2. Asymmetric Sea Cove Side Buttress Cliffs
+  const numButtresses = 2 + Math.floor(Math.random() * 2)
   for (let b = 0; b < numButtresses; b++) {
-    const bRadius = rockRadius * (0.55 + Math.random() * 0.3)
-    const bHeightScale = 1.5 + Math.random() * 1.0
-    const bMesh = createRockMesh(bRadius, bHeightScale, 3.0)
-    const angle = b * Math.PI + (Math.random() - 0.5) * 1.0
-    const dist = rockRadius * 0.7
-    bMesh.position.set(Math.cos(angle) * dist, -bRadius * 0.25, Math.sin(angle) * dist)
+    const bRadius = rockRadius * (0.6 + Math.random() * 0.3)
+    const bHeightScale = 1.2 + Math.random() * 0.8
+    const bMesh = createRockMesh(bRadius, bHeightScale, 2.8)
+    const angle = (b / numButtresses) * Math.PI * 2 + (Math.random() - 0.5) * 0.8
+    const dist = rockRadius * 0.75
+    bMesh.position.set(Math.cos(angle) * dist, (bRadius * bHeightScale * 2.0) * 0.22 - 5.0, Math.sin(angle) * dist)
     bMesh.rotation.y = Math.random() * Math.PI * 2
     rockGroup.add(bMesh)
   }
 
-  // 3. Jagged Satellite Sea Stack Pillars (2-3 surrounding rocks)
-  const numSat = 2 + Math.floor(Math.random() * 2)
+  // 3. Jagged Satellite Boulders & Reef Pillars
+  const numSat = 3 + Math.floor(Math.random() * 3)
   for (let s = 0; s < numSat; s++) {
-    const satRadius = rockRadius * (0.3 + Math.random() * 0.25)
-    const satHeightScale = 1.6 + Math.random() * 1.2
+    const satRadius = rockRadius * (0.35 + Math.random() * 0.3)
+    const satHeightScale = 1.0 + Math.random() * 0.8
     const satMesh = createRockMesh(satRadius, satHeightScale, 2.0)
     const angle = Math.random() * Math.PI * 2
-    const dist = rockRadius * 1.4 + Math.random() * 8
-    satMesh.position.set(Math.cos(angle) * dist, -satRadius * 0.3, Math.sin(angle) * dist)
+    const dist = rockRadius * 1.3 + Math.random() * 6
+    satMesh.position.set(Math.cos(angle) * dist, (satRadius * satHeightScale * 2.0) * 0.20 - 4.5, Math.sin(angle) * dist)
     satMesh.rotation.y = Math.random() * Math.PI * 2
     rockGroup.add(satMesh)
   }
 
-  // Shallow Turquoise Reef Apron Ring around formation base
-  const reefGeom = new THREE.RingGeometry(rockRadius * 0.9, rockRadius * 2.2, 32)
-  reefGeom.rotateX(-Math.PI / 2)
-  const reefMat = new THREE.MeshBasicMaterial({
-    color: 0x00e5ff, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false
-  })
-  const reefMesh = new THREE.Mesh(reefGeom, reefMat)
-  reefMesh.position.y = 0.15
-  rockGroup.add(reefMesh)
+  // 3D Coral Reef Clusters around rock base
+  const numRockCorals = 3 + Math.floor(Math.random() * 3)
+  for (let c = 0; c < numRockCorals; c++) {
+    const cAngle = Math.random() * Math.PI * 2
+    const cDist = rockRadius * (1.1 + Math.random() * 0.5)
+    const coralCluster = createCoralReefCluster()
+    coralCluster.position.set(Math.cos(cAngle) * cDist, -2.5, Math.sin(cAngle) * cDist)
+    coralCluster.rotation.y = Math.random() * Math.PI * 2
+    rockGroup.add(coralCluster)
+  }
 
   rockGroup.position.set(x, 0, z)
   scene.add(rockGroup)
   return { x, z, radius: rockRadius + 12, mesh: rockGroup }
+}
+
+export function createCoralReefCluster(): THREE.Group {
+  const coralGroup = new THREE.Group()
+
+  const staghornMat = new THREE.MeshStandardMaterial({ color: 0xff5500, roughness: 0.7 })
+  const brainMat    = new THREE.MeshStandardMaterial({ color: 0x9b51e0, roughness: 0.85 })
+  const fanMat      = new THREE.MeshStandardMaterial({ color: 0x00e5ff, roughness: 0.6, side: THREE.DoubleSide })
+  const magentaMat  = new THREE.MeshStandardMaterial({ color: 0xff2288, roughness: 0.75 })
+
+  // 1. Staghorn Coral Branches
+  const numBranches = 4 + Math.floor(Math.random() * 4)
+  for (let b = 0; b < numBranches; b++) {
+    const height = 1.2 + Math.random() * 1.5
+    const branchGeom = new THREE.ConeGeometry(0.25, height, 5)
+    const branch = new THREE.Mesh(branchGeom, Math.random() > 0.5 ? staghornMat : magentaMat)
+    const bAngle = (b / numBranches) * Math.PI * 2 + Math.random() * 0.4
+    const bDist = Math.random() * 0.8
+    branch.position.set(Math.cos(bAngle) * bDist, height / 2, Math.sin(bAngle) * bDist)
+    branch.rotation.set((Math.random() - 0.5) * 0.5, bAngle, (Math.random() - 0.5) * 0.5)
+    coralGroup.add(branch)
+  }
+
+  // 2. Brain / Dome Coral
+  const brainRadius = 0.6 + Math.random() * 0.7
+  const brainGeom = new THREE.DodecahedronGeometry(brainRadius, 1)
+  const brain = new THREE.Mesh(brainGeom, brainMat)
+  brain.position.set((Math.random() - 0.5) * 1.8, brainRadius * 0.6, (Math.random() - 0.5) * 1.8)
+  coralGroup.add(brain)
+
+  // 3. Sea Fan Coral Ledge
+  const fanGeom = new THREE.CircleGeometry(0.8 + Math.random() * 0.6, 6)
+  fanGeom.rotateX(-Math.PI / 3)
+  const fan = new THREE.Mesh(fanGeom, fanMat)
+  fan.position.set((Math.random() - 0.5) * 2.2, 0.4, (Math.random() - 0.5) * 2.2)
+  coralGroup.add(fan)
+
+  return coralGroup
 }
 
 export function spawnSunkenShip(scene: THREE.Scene, x: number, z: number) {

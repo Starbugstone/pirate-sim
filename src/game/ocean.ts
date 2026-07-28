@@ -13,12 +13,12 @@ const SWELL_C_X =  0.500,  SWELL_C_Z = -0.866
 // [dirX, dirZ, frequency, speed, amplitude, steepness(Q)]
 const WAVES = [
   // dirX, dirZ, freq, speed, amp, Q
-  [ 0.766, -0.642, 0.065, 0.65, 1.30, 0.95], // Primary North-West swell
-  [-0.939,  0.342, 0.081, 0.82, 0.65, 0.88], // Sharp East-South swell
-  [-0.173, -0.984, 0.120, 1.10, 0.25, 0.80], // Tight North wobble
-  [ 0.542,  0.840, 0.180, 1.45, 0.15, 0.70], // South-West chop
-  [-0.642, -0.766, 0.250, 1.90, 0.08, 0.60], // Micro North-East detail
-  [ 0.840,  0.542, 0.350, 2.40, 0.04, 0.50], // Fine South-West surface ripple
+  [ 0.766, -0.642, 0.040, 0.75, 1.85, 0.95], // Primary rolling NW swell
+  [-0.939,  0.342, 0.058, 0.90, 1.10, 0.90], // Sharp cross swell
+  [-0.173, -0.984, 0.090, 1.20, 0.60, 0.85], // North ocean chop
+  [ 0.542,  0.840, 0.140, 1.50, 0.35, 0.75], // South-West wavelets
+  [-0.642, -0.766, 0.200, 1.95, 0.18, 0.65], // High-freq surface ripples
+  [ 0.840,  0.542, 0.300, 2.40, 0.08, 0.55], // Capillary waves
 ] as const
 
 const RIPPLE_FREQ  = 0.95
@@ -40,8 +40,6 @@ const vertexShader = `
   varying float vElevation;
   varying float vFoam;
   varying float vDepth;
-
-  // Swells evaluated dynamically
 
   void gerstner(vec2 pos, vec2 dir, float freq, float spd, float amp, float Q,
                 inout vec3 disp, inout vec3 tX, inout vec3 tY) {
@@ -73,11 +71,8 @@ const vertexShader = `
 
 ${WAVES.map((w, i) => `    gerstner(wc, vec2(${w[0].toFixed(4)}, ${w[1].toFixed(4)}), ${w[2].toFixed(4)}, ${w[3].toFixed(4)}, ${w[4].toFixed(4)}, ${w[5].toFixed(4)}, disp, tX, tY);`
 ).join('\n')}
-    // Hardcode the micro-ripple direction to avoid phase-sweep jitter on wind shift
     vec2 w = normalize(vec2(0.8, 0.6));
-    float rAmp = 0.070 + uWindStrength * 0.003;
-    
-    // Evaluate using absolute world coordinates so the boat sails THROUGH the sea, not WITH it
+    float rAmp = 0.080 + uWindStrength * 0.004;
     gerstner(wc, w, 0.9500, 2.6000, rAmp, 0.8500, disp, tX, tY);
 
     vec3 pos = position;
@@ -93,8 +88,8 @@ ${WAVES.map((w, i) => `    gerstner(wc, vec2(${w[0].toFixed(4)}, ${w[1].toFixed(
     vElevation     = disp.y;
 
     float slope = 1.0 - abs(localN.z);
-    vFoam = smoothstep(0.06, 0.22, slope) * 0.7
-          + smoothstep(1.0, 2.2, disp.y) * 0.5;
+    vFoam = smoothstep(0.08, 0.28, slope) * 0.80
+          + smoothstep(0.6, 2.2, disp.y) * 0.60;
 
     vDepth = clamp((-disp.y + 1.0) / 4.0, 0.0, 1.0);
 
@@ -118,119 +113,75 @@ const fragmentShader = `
   varying float vFoam;
   varying float vDepth;
 
-  // Hash for procedural patterns
-  float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-  }
-
   void main() {
     vec3 N = normalize(vWorldNormal);
 
-    // ── Detail-normal perturbation (small surface waves, fragment-level) ──
+    // Continuous surface micro-ripples
     vec2 uv = vWorldPos;
     float t = uTime;
-    float dx = cos(uv.x * 0.55 + uv.y * 0.28 + t * 0.7)  * 0.30
-             + cos(uv.x * 1.6 - t * 1.1) * cos(uv.y * 1.3 + t * 0.7) * 0.18
-             + cos(uv.x * 3.8 + t * 2.0) * cos(uv.y * 3.2 - t * 1.5) * 0.06
-             + cos(uv.x * 7.0 + t * 3.2) * 0.02;
-    float dz = cos(uv.y * 0.50 - uv.x * 0.20 - t * 0.55) * 0.30
-             + cos(uv.y * 1.8 + t * 0.95) * cos(uv.x * 1.1 - t * 0.85) * 0.18
-             + cos(uv.y * 3.5 - t * 1.8) * cos(uv.x * 2.8 + t * 1.3) * 0.06
-             + cos(uv.y * 6.5 - t * 2.8) * 0.02;
-    N = normalize(N + vec3(dx, 0.0, dz) * 0.10);
+    float dx = cos(uv.x * 0.45 + uv.y * 0.25 + t * 0.9) * 0.25
+             + cos(uv.x * 1.4 - t * 1.3) * cos(uv.y * 1.1 + t * 0.8) * 0.12;
+    float dz = cos(uv.y * 0.40 - uv.x * 0.20 - t * 0.7) * 0.25
+             + cos(uv.y * 1.5 + t * 1.1) * cos(uv.x * 0.9 - t * 0.9) * 0.12;
+    N = normalize(N + vec3(dx, 0.0, dz) * 0.18);
 
     vec3 V      = normalize(cameraPosition - vWorldPosition);
-    vec3 sunDir = normalize(vec3(0.25, 0.80, 0.35));
+    vec3 sunDir = normalize(vec3(0.35, 0.82, 0.45));
     float NdotV = max(dot(N, V), 0.0);
     float NdotL = max(dot(N, sunDir), 0.0);
 
-    // ── Base water colour: Deep pure blues (Less green/turquoise) ──
-    vec3 deepOcean   = vec3(0.00, 0.07, 0.35); // Viscose deep blue
-    vec3 shallowCol  = vec3(0.05, 0.35, 0.70); // Strong pure blue
-    vec3 crestCol    = vec3(0.15, 0.65, 0.90); // Piercing light blue at peaks
-    
-    // Adjust scale since amplitude is much higher now (up to ~5.0 total)
-    float elev = clamp((vElevation + 3.0) / 6.0, 0.0, 1.0);
-    // Smooth interpolations based on elevation
-    vec3 col = mix(deepOcean, shallowCol, smoothstep(0.0, 0.5, elev));
-    col = mix(col, crestCol, smoothstep(0.5, 0.9, elev));
+    // Caribbean Sea Color Spectrum
+    vec3 deepCobalt     = vec3(0.01, 0.10, 0.32);
+    vec3 reefAqua       = vec3(0.00, 0.52, 0.68);
+    vec3 shallowTurq    = vec3(0.05, 0.78, 0.82);
+    vec3 clearCyan      = vec3(0.18, 0.90, 0.85);
 
-    // Darken the deep troughs slightly
-    col *= mix(0.70, 1.0, elev);
+    float elev = clamp((vElevation + 3.2) / 6.4, 0.0, 1.0);
 
-    // ── Diffuse lighting ──
-    col += vec3(0.05, 0.1, 0.15) * NdotL;
+    vec3 col = mix(deepCobalt, reefAqua, smoothstep(0.0, 0.45, elev));
+    col = mix(col, shallowTurq, smoothstep(0.45, 0.80, elev));
+    col = mix(col, clearCyan, smoothstep(0.80, 1.0, elev));
 
-    // ── Subsurface scattering — luminous turquoise through wave crests ──
-    vec3 sssDir = normalize(sunDir + N * 0.55);
-    float sss = pow(max(dot(V, -sssDir), 0.0), 2.0)
-              * smoothstep(-0.5, 1.5, vElevation) * 0.75;
-    col += vec3(0.1, 0.6, 0.5) * sss;
+    col *= mix(0.75, 1.08, elev);
 
-    // Thinner areas near crest tops get extra translucency
-    float thinEdge = smoothstep(0.8, 1.8, vElevation) * pow(max(1.0 - NdotV, 0.0), 2.0);
-    col += vec3(0.15, 0.70, 0.65) * thinEdge * 0.6;
+    // Subsurface Scattering
+    vec3 sssDir = normalize(sunDir + N * 0.4);
+    float sss = pow(max(dot(V, -sssDir), 0.0), 2.5) * smoothstep(-0.2, 1.4, vElevation) * 0.65;
+    col += vec3(0.08, 0.82, 0.72) * sss;
 
-    // Back-lit rim on crests
-    float backLit = pow(max(dot(V, -sunDir), 0.0), 4.0)
-                  * smoothstep(0.3, 1.8, vElevation) * 0.5;
-    col += vec3(0.1, 0.5, 0.4) * backLit;
+    float thinEdge = smoothstep(0.65, 1.8, vElevation) * pow(max(1.0 - NdotV, 0.0), 2.0);
+    col += vec3(0.15, 0.85, 0.80) * thinEdge * 0.5;
 
-    // ── Sun specular — sharp dancing glints ──
-    vec3  H       = normalize(sunDir + V);
+    // Sun Specular Shimmer
+    vec3 H        = normalize(sunDir + V);
     float NdotH   = max(dot(N, H), 0.0);
-    float sunSpec = pow(NdotH, 512.0) * 1.4;
-    col += vec3(1.0, 0.97, 0.90) * sunSpec;
+    float sunSpec = pow(NdotH, 384.0) * 1.5;
+    col += vec3(1.0, 0.98, 0.92) * sunSpec;
 
-    // Secondary broader sun shimmer
-    float shimmer = pow(NdotH, 48.0) * 0.12;
-    col += vec3(0.9, 0.95, 1.0) * shimmer;
+    float shimmer = pow(NdotH, 48.0) * 0.15;
+    col += vec3(0.85, 0.95, 1.0) * shimmer;
 
-    // ── Sky specular — broad cool reflection ──
-    float skySpec = pow(NdotH, 10.0) * 0.04;
-    col += vec3(0.45, 0.6, 0.8) * skySpec;
-
-    // ── Fresnel reflection — sky dome gradient ──
-    float fresnel = pow(1.0 - NdotV, 4.5);
-    vec3 R     = reflect(-V, N);
+    // Fresnel Sky Dome Gradient
+    float fresnel = pow(1.0 - NdotV, 4.0);
+    vec3 R = reflect(-V, N);
     float skyT = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 horizonCol = vec3(0.60, 0.74, 0.85);
-    vec3 zenithCol  = vec3(0.18, 0.38, 0.68);
+    vec3 horizonCol = vec3(0.65, 0.82, 0.92);
+    vec3 zenithCol  = vec3(0.12, 0.42, 0.78);
     vec3 skyReflect = mix(horizonCol, zenithCol, skyT);
-    col = mix(col, skyReflect, fresnel * 0.42);
+    col = mix(col, skyReflect, fresnel * 0.40);
 
-    // ── Foam & whitecaps ──
-    float foam = vFoam;
+    // Rolling wave crest foam
+    float waveSlopeFoam = vFoam * 0.7;
+    float crestFoam = smoothstep(0.72, 0.98, elev) * 0.65;
+    float totalFoam = clamp(waveSlopeFoam + crestFoam, 0.0, 1.0);
 
-    // Animated wind-aligned foam streaks on wave faces
-    vec2 fw = normalize(uWindDir);
-    vec2 perp = vec2(-fw.y, fw.x);
-    float streak1 = sin(dot(vWorldPos, fw) * 0.25 + t * 0.20)
-                  * cos(dot(vWorldPos, perp) * 0.18 - t * 0.10);
-    float streak2 = sin(dot(vWorldPos, fw) * 0.6 + t * 0.35)
-                  * cos(dot(vWorldPos, perp) * 0.45 + t * 0.18);
-    foam += max(streak1, 0.0) * 0.20 * smoothstep(0.5, 1.8, vElevation);
-    foam += max(streak2, 0.0) * 0.10 * smoothstep(0.8, 2.0, vElevation);
+    vec3 foamCol = vec3(0.96, 1.0, 1.0);
+    col = mix(col, foamCol, totalFoam * 0.75);
 
-    // Breaking-crest whitecap: pure continuous thin line at the absolute top of the ridge
-    float crestLine = smoothstep(0.96, 0.99, elev); // Trigger only at the extreme 3% top edge
-    foam += crestLine * 1.5;
+    float alpha = mix(0.75, 0.55, smoothstep(0.1, 0.9, elev));
+    alpha = mix(alpha, 0.95, totalFoam * 0.75);
 
-    // Small speckle noise to add a bit of water detail, but entirely avoiding big blocks
-    float fineSpeckle = step(0.85, hash(floor(vWorldPos * 30.0 - vec2(t * 5.0, t * 5.0)))) * smoothstep(0.8, 0.95, elev);
-    foam += fineSpeckle * 0.4;
-
-    // Pure white foam color to pop against the blue
-    vec3 foamCol = vec3(1.0, 1.0, 1.0);
-    col = mix(col, foamCol, clamp(foam, 0.0, 1.0));
-
-    // ── Alpha: Increased opacity ("less alpha" means less transparent) ──
-    float alpha = mix(0.85, 0.65, smoothstep(0.1, 0.9, elev));
-    // Foam makes water surface more visibly opaque
-    alpha = mix(alpha, 1.0, clamp(foam, 0.0, 1.0));
-
-    // ── Tone-map ──
-    col = col / (col + 0.55) * 1.2;
+    col = col / (col + 0.45) * 1.12;
 
     gl_FragColor = vec4(col, alpha);
     #include <fog_fragment>
@@ -241,8 +192,6 @@ const sandVertexShader = `
   #include <fog_pars_vertex>
   varying vec2 vWorldXZ;
   void main() {
-    // Pass WORLD-SPACE xz so the sand pattern stays geographically fixed
-    // even though the plane itself tracks the player.
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldXZ = worldPos.xz;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
@@ -253,14 +202,13 @@ const sandVertexShader = `
 
 const sandFragmentShader = `
   #include <fog_pars_fragment>
+  uniform float uTime;
   varying vec2 vWorldXZ;
 
-  // Simple pseudo-random hash
   float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
   }
 
-  // Basic value noise
   float noise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
@@ -272,7 +220,6 @@ const sandFragmentShader = `
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
 
-  // FBM (Fractal Brownian Motion) for sand variance
   float fbm(vec2 p) {
     float f = 0.0;
     float w = 0.5;
@@ -285,25 +232,31 @@ const sandFragmentShader = `
   }
 
   void main() {
-    // Use world-space XZ so patterns stay fixed geographically
-    vec2 p = vWorldXZ * 0.4;
+    vec2 p = vWorldXZ * 0.30;
+    float t = uTime * 1.2;
     
-    // Create sand ripple effect
-    float ripples = sin(p.x * 2.0 + noise(p * 0.2) * 4.0) * 0.5 + 0.5;
-    float sandNoise = fbm(p * 0.5);
+    // Smooth Caribbean Sand & Dunes
+    float ripples = sin(p.x * 2.0 + noise(p * 0.2) * 3.5) * 0.5 + 0.5;
+    float sandNoise = fbm(p * 0.35);
     
-    // Base sand colors
-    vec3 colorA = vec3(0.5, 0.45, 0.35); // Darker wet sand
-    vec3 colorB = vec3(0.7, 0.65, 0.50); // Lighter sand
+    vec3 goldenSand = vec3(0.88, 0.80, 0.62);
+    vec3 wetSand    = vec3(0.60, 0.52, 0.38);
+    vec3 reefShadow = vec3(0.25, 0.42, 0.35);
     
-    vec3 color = mix(colorA, colorB, sandNoise);
+    vec3 color = mix(wetSand, goldenSand, sandNoise);
     
-    // Add darker spots for rocks/variance
-    float spots = smoothstep(0.7, 0.8, fbm(p * 2.0));
-    color = mix(color, vec3(0.2, 0.2, 0.15), spots * 0.6);
+    float reefSpot = smoothstep(0.68, 0.88, fbm(p * 1.1));
+    color = mix(color, reefShadow, reefSpot * 0.5);
     
-    // Apply ripples
-    color -= ripples * 0.08;
+    color -= ripples * 0.06;
+
+    // Smooth fluid underwater light network (ZERO static dots!)
+    vec2 cUv1 = vWorldXZ * 0.08 + vec2(t * 0.25, t * 0.18);
+    vec2 cUv2 = vWorldXZ * 0.14 - vec2(t * 0.18, -t * 0.22);
+    float caust1 = sin(cUv1.x * 6.28 + cos(cUv1.y * 5.0)) * 0.5 + 0.5;
+    float caust2 = cos(cUv2.y * 6.28 + sin(cUv2.x * 5.0)) * 0.5 + 0.5;
+    float caustics = smoothstep(0.45, 0.85, caust1 * caust2);
+    color += vec3(0.12, 0.55, 0.50) * caustics * 0.25;
 
     gl_FragColor = vec4(color, 1.0);
     #include <fog_fragment>
@@ -320,7 +273,10 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
   const deepMat  = new THREE.ShaderMaterial({
     vertexShader: sandVertexShader,
     fragmentShader: sandFragmentShader,
-    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib['fog']]),
+    uniforms: THREE.UniformsUtils.merge([
+      THREE.UniformsLib['fog'],
+      { uTime: { value: 0 } }
+    ]),
     fog: true,
     side: THREE.FrontSide
   })
@@ -331,7 +287,7 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
   deepPlane.renderOrder = -1
   scene.add(deepPlane)
 
-  const geometry = new THREE.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE, OCEAN_SEGMENTS, OCEAN_SEGMENTS)
+  const geometry = new THREE.PlaneGeometry(OCEAN_SIZE * 2, OCEAN_SIZE * 2, 160, 160)
   const material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
@@ -376,6 +332,7 @@ export function updateOcean(
   if (mesh.userData.deepPlane) {
     mesh.userData.deepPlane.position.x = playerX
     mesh.userData.deepPlane.position.z = playerZ
+    ;(mesh.userData.deepPlane.material as THREE.ShaderMaterial).uniforms.uTime.value = time
   }
   const u = (mesh.material as THREE.ShaderMaterial).uniforms
   u.uTime.value         = time

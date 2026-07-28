@@ -13,7 +13,7 @@ import { normalizeAngle, shortestAngleDelta } from './helpers'
 import { createOcean, updateOcean, setOceanIslands, getOceanHeight, createSprayPool, emitSpray, updateSpray } from './ocean'
 import { createPlayerShip as buildPlayerShip, createEnemyShipMesh, updateShipBuoyancy } from './ships'
 import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
-import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, clearShipWakes, createCannonMuzzleFlash, updateMuzzleFlashes } from './effects'
+import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, clearShipWakes, createCannonMuzzleFlash, updateMuzzleFlashes, clearMuzzleFlashes } from './effects'
 import { createAmbientFish, updateAmbientFish } from './ambientFish'
 import { updateShorelineFoamTime } from './terrain'
 const makeRef = (value) => ({ value })
@@ -194,6 +194,36 @@ let windVisualSpeed = 3
 
 // Projectiles
 let cannonballs = []
+const cannonballGeometry = new THREE.SphereGeometry(0.35, 8, 8)
+const playerCannonballMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.3 })
+const enemyCannonballMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 })
+
+function removeCannonballAt(index) {
+  const ball = cannonballs[index]
+  if (ball?.mesh) scene.remove(ball.mesh)
+  cannonballs.splice(index, 1)
+}
+
+function spawnCannonball(position, velocity, options) {
+  // Enforce the cap before allocating/adding a new mesh, including during a
+  // large broadside fired within a single frame.
+  while (cannonballs.length >= MAX_CANNONBALLS) removeCannonballAt(0)
+
+  const ball = new THREE.Mesh(
+    cannonballGeometry,
+    options.isEnemy ? enemyCannonballMaterial : playerCannonballMaterial
+  )
+  ball.position.copy(position)
+  cannonballs.push({
+    mesh: ball,
+    vx: velocity.x,
+    vz: velocity.z,
+    life: 3,
+    spawnTime: performance.now(),
+    ...options
+  })
+  scene.add(ball)
+}
 
 // Ship wake/trail particles
 let playerWake = []
@@ -585,7 +615,7 @@ function spawnEnemyShip() {
       maxHp: shipType.hp,
       angle: 0,
       type: type,
-      lastShot: 0,
+      nextShotAt: performance.now() + 800 + Math.random() * 1200,
       sinking: false,
       sinkingTime: 0
     }
@@ -982,7 +1012,7 @@ function spawnRandomShip(x, z) {
     maxHp: shipType.hp,
     angle: Math.random() * Math.PI * 2,
     type,
-    lastShot: 0,
+    nextShotAt: performance.now() + 800 + Math.random() * 1200,
     sinking: false,
     sinkingTime: 0
   }
@@ -1227,21 +1257,8 @@ function fireCannon(side) {
         // Create muzzle flash particle & smoke burst at cannon muzzle
         createCannonMuzzleFlash(scene, muzzleWorldPos.clone(), muzzleDir.clone())
 
-        const ballGeometry = new THREE.SphereGeometry(0.35, 8, 8)
-        const ballMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.3 })
-        const ball = new THREE.Mesh(ballGeometry, ballMaterial)
-        ball.position.copy(muzzleWorldPos)
-
         const speed = 42
-        cannonballs.push({
-          mesh: ball,
-          vx: muzzleDir.x * speed,
-          vz: muzzleDir.z * speed,
-          life: 3,
-          isPlayer: true,
-          spawnTime: Date.now()
-        })
-        scene.add(ball)
+        spawnCannonball(muzzleWorldPos, muzzleDir.clone().multiplyScalar(speed), { isPlayer: true })
       })
     } else {
       const numCannons = 3 + playerUpgrades.value.cannonCount * 2
@@ -1256,17 +1273,7 @@ function fireCannon(side) {
         muzzleDir.set(Math.sin(fireAngle), 0, Math.cos(fireAngle)).normalize()
         createCannonMuzzleFlash(scene, muzzleWorldPos.clone(), muzzleDir.clone())
 
-        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), new THREE.MeshStandardMaterial({ color: 0x111111 }))
-        ball.position.copy(muzzleWorldPos)
-        cannonballs.push({
-          mesh: ball,
-          vx: muzzleDir.x * 42,
-          vz: muzzleDir.z * 42,
-          life: 3,
-          isPlayer: true,
-          spawnTime: Date.now()
-        })
-        scene.add(ball)
+        spawnCannonball(muzzleWorldPos, muzzleDir.clone().multiplyScalar(42), { isPlayer: true })
       }
     }
   })
@@ -1282,11 +1289,11 @@ function fireEnemyCannon() {
   }
 }
 
-function fireEnemyCannonMulti(enemy, shipType, enemyIndex) {
+function fireEnemyCannonMulti(enemy, shipType, enemyIndex, sideToFire) {
   const angle = enemy.angle
   const mesh = enemyShipMeshes[enemyIndex]
 
-  const sides = (shipType === SHIP_TYPES.NORMAL) ? [Math.random() > 0.5 ? 'port' : 'starboard'] : ['port', 'starboard']
+  const sides = [sideToFire || 'starboard']
   const muzzlePos = new THREE.Vector3()
   const muzzleDir = new THREE.Vector3()
 
@@ -1310,48 +1317,28 @@ function fireEnemyCannonMulti(enemy, shipType, enemyIndex) {
         muzzleDir.set(Math.sin(fireAngle), 0, Math.cos(fireAngle))
         createCannonMuzzleFlash(scene, muzzlePos.clone(), muzzleDir.clone())
 
-        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), new THREE.MeshBasicMaterial({ color: 0x222222 }))
-        ball.position.copy(muzzlePos)
-        cannonballs.push({
-          mesh: ball,
-          vx: muzzleDir.x * 35,
-          vz: muzzleDir.z * 35,
-          life: 3,
+        spawnCannonball(muzzlePos, muzzleDir.clone().multiplyScalar(35), {
           isEnemy: true,
-          spawnTime: Date.now(),
           damage: shipType.cannonDamage,
           sourceIndex: enemyIndex
         })
-        scene.add(ball)
       })
     } else {
       muzzlePos.set(enemy.x, 2.5, enemy.z)
       muzzleDir.set(Math.sin(angle), 0, Math.cos(angle))
       createCannonMuzzleFlash(scene, muzzlePos.clone(), muzzleDir.clone())
 
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), new THREE.MeshBasicMaterial({ color: 0x222222 }))
-      ball.position.copy(muzzlePos)
-      cannonballs.push({
-        mesh: ball,
-        vx: muzzleDir.x * 35,
-        vz: muzzleDir.z * 35,
-        life: 3,
+      spawnCannonball(muzzlePos, muzzleDir.clone().multiplyScalar(35), {
         isEnemy: true,
-        spawnTime: Date.now(),
         damage: shipType.cannonDamage,
         sourceIndex: enemyIndex
       })
-      scene.add(ball)
     }
   })
 }
 
 function updateCannonballs(dt) {
-  // Hard cap enforcement - remove oldest if over limit
-  while (cannonballs.length > MAX_CANNONBALLS) {
-    const ball = cannonballs.shift()
-    if (ball && ball.mesh) disposeMesh(ball.mesh)
-  }
+  while (cannonballs.length > MAX_CANNONBALLS) removeCannonballAt(0)
 
   for (let i = cannonballs.length - 1; i >= 0; i--) {
     const ball = cannonballs[i]
@@ -1359,8 +1346,7 @@ function updateCannonballs(dt) {
     // Performance: Cull distant cannonballs
     const distToPlayerSq = (ball.mesh.position.x - playerPos.value.x) ** 2 + (ball.mesh.position.z - playerPos.value.z) ** 2
     if (distToPlayerSq > CANNONBALL_CULL_DIST * CANNONBALL_CULL_DIST) {
-      disposeMesh(ball.mesh)
-      cannonballs.splice(i, 1)
+      removeCannonballAt(i)
       continue
     }
 
@@ -1369,6 +1355,7 @@ function updateCannonballs(dt) {
     ball.life -= dt
 
     // Check collision with enemies (both player AND enemy cannons can damage enemies)
+    let hitEnemy = false
     if (ball.isPlayer || ball.isEnemy) {
       for (let eIndex = 0; eIndex < enemyShips.value.length; eIndex++) {
         const enemy = enemyShips.value[eIndex]
@@ -1382,7 +1369,7 @@ function updateCannonballs(dt) {
         const shipType = SHIP_TYPES[enemy.type]
         const hitDist = 6 * shipType.size
 
-        if (Math.sqrt(dx * dx + dz * dz) < hitDist) {
+        if (dx * dx + dz * dz < hitDist * hitDist) {
           const damage = ball.damage || 10
           enemy.hp -= damage
 
@@ -1392,42 +1379,41 @@ function updateCannonballs(dt) {
             showMessage(`Enemy fire hit ${shipType.name}`)
           }
 
-          disposeMesh(ball.mesh)
-          cannonballs.splice(i, 1)
+          removeCannonballAt(i)
+          hitEnemy = true
           break // Only hit one enemy
         }
       }
     }
+    if (hitEnemy) continue
 
     // Check collision with kraken
     if (krakenActive && kraken.value.hp > 0) {
       const dx = ball.mesh.position.x - kraken.value.x
       const dz = ball.mesh.position.z - kraken.value.z
-      if (Math.sqrt(dx * dx + dz * dz) < 10) {
+      if (dx * dx + dz * dz < 100) {
         kraken.value.hp -= 5
         showMessage('Hit the Kraken!')
         if (kraken.value.hp <= 0) {
           victory.value = true
           gameState.value = 'gameover'
         }
-        disposeMesh(ball.mesh)
-        cannonballs.splice(i, 1)
+        removeCannonballAt(i)
         continue
       }
     }
 
     // Check collision with player (from enemy cannons only - not your own!)
     // Add grace period so your own cannons don't hit you
-    const age = (Date.now() - ball.spawnTime) / 1000
+    const age = (performance.now() - ball.spawnTime) / 1000
     if (age > 0.3 && ball.isEnemy) {
       const pdx = ball.mesh.position.x - playerPos.value.x
       const pdz = ball.mesh.position.z - playerPos.value.z
-      if (Math.sqrt(pdx * pdx + pdz * pdz) < 3) {
+      if (pdx * pdx + pdz * pdz < 9) {
         const damage = ball.damage || 10
         hp.value -= damage
         showMessage('You were hit!')
-        disposeMesh(ball.mesh)
-        cannonballs.splice(i, 1)
+        removeCannonballAt(i)
         if (hp.value <= 0) {
           gameState.value = 'gameover'
         }
@@ -1436,35 +1422,38 @@ function updateCannonballs(dt) {
     }
 
     if (ball.life <= 0) {
-      disposeMesh(ball.mesh)
-      cannonballs.splice(i, 1)
+      removeCannonballAt(i)
       continue
     }
 
     // Check collision with islands and rocks — cannonballs smash into terrain
     let hitTerrain = false
-    for (const island of [...islands, ...worldObjects.islands]) {
-      const dx = ball.mesh.position.x - island.x
-      const dz = ball.mesh.position.z - island.z
-      if (Math.sqrt(dx * dx + dz * dz) < island.radius) {
-        hitTerrain = true
-        break
-      }
-    }
-    if (!hitTerrain) {
-      for (const rock of [...rocks, ...worldObjects.rocks]) {
-        const dx = ball.mesh.position.x - rock.x
-        const dz = ball.mesh.position.z - rock.z
-        if (Math.sqrt(dx * dx + dz * dz) < rock.radius + 2) {
+    for (const islandList of [islands, worldObjects.islands]) {
+      for (const island of islandList) {
+        const dx = ball.mesh.position.x - island.x
+        const dz = ball.mesh.position.z - island.z
+        if (dx * dx + dz * dz < island.radius * island.radius) {
           hitTerrain = true
           break
         }
       }
+      if (hitTerrain) break
     }
-    if (hitTerrain) {
-      disposeMesh(ball.mesh)
-      cannonballs.splice(i, 1)
+    if (!hitTerrain) {
+      for (const rockList of [rocks, worldObjects.rocks]) {
+        for (const rock of rockList) {
+          const dx = ball.mesh.position.x - rock.x
+          const dz = ball.mesh.position.z - rock.z
+          const hitRadius = rock.radius + 2
+          if (dx * dx + dz * dz < hitRadius * hitRadius) {
+            hitTerrain = true
+            break
+          }
+        }
+        if (hitTerrain) break
+      }
     }
+    if (hitTerrain) removeCannonballAt(i)
   }
 }
 
@@ -2782,18 +2771,27 @@ function update(dt) {
       showMessage(`Collision with ${typeName}`)
     }
 
-    // Enemy fires only when attacking and in range
+    // Enemy fires only when attacking, in range, and presenting a broadside.
     if (enemy.state === 'ATTACKING' || enemy.state === 'ALERT') {
-      const now = Date.now()
-      // Fire rates - more aggressive
-      const fireChance = enemy.type === 'BIG' ? 0.08 : (enemy.type === 'NORMAL' ? 0.1 : 0.15)
+      const now = performance.now()
       const fireRange = enemy.type === 'NORMAL' ? 45 : 55
+      const starboardAlignment = distToPlayer > 0
+        ? (dx * Math.cos(enemy.angle) - dz * Math.sin(enemy.angle)) / distToPlayer
+        : 0
+      const hasBroadsideAim = Math.abs(starboardAlignment) > 0.65
 
-      if (Math.random() < fireChance && distToPlayer < fireRange && now - enemy.lastShot > 1200) {
-        // Check line of sight to player
+      if (distToPlayer < fireRange && hasBroadsideAim && now >= enemy.nextShotAt) {
+        // Avoid repeating terrain line-of-sight scans every rendered frame when
+        // an island blocks an otherwise valid shot.
+        enemy.nextShotAt = now + 250
         if (hasLineOfSight(enemy.x, enemy.z, playerPos.value.x, playerPos.value.z)) {
-          enemy.lastShot = now
-          fireEnemyCannonMulti(enemy, shipType, index)
+          const sideToFire = starboardAlignment > 0 ? 'starboard' : 'port'
+          fireEnemyCannonMulti(enemy, shipType, index, sideToFire)
+
+          // A real-time reload schedule is independent of frame rate and is
+          // staggered so several enemies cannot create one giant synchronized burst.
+          const reloadTime = enemy.type === 'BIG' ? 3000 : (enemy.type === 'NORMAL' ? 2400 : 2800)
+          enemy.nextShotAt = now + reloadTime + Math.random() * 700
         }
       }
     }
@@ -3312,8 +3310,9 @@ function startGame() {
   // createKrakenLocal()
 
   // Clear cannonballs - dispose properly
-  cannonballs.forEach(b => { if (b && b.mesh) disposeMesh(b.mesh) })
+  cannonballs.forEach(b => { if (b?.mesh) scene.remove(b.mesh) })
   cannonballs = []
+  clearMuzzleFlashes(scene)
 
   // Clear wake particles - dispose properly
   playerWake.forEach(w => { if (w && w.mesh) disposeMesh(w.mesh) })
@@ -3387,6 +3386,14 @@ function startGame() {
         windParticleContext.clearRect(0, 0, window.innerWidth, window.innerHeight)
       }
       if (scene) clearShipWakes(scene)
+      if (scene) {
+        cannonballs.forEach(b => { if (b?.mesh) scene.remove(b.mesh) })
+        cannonballs = []
+        clearMuzzleFlashes(scene)
+      }
+      cannonballGeometry.dispose()
+      playerCannonballMaterial.dispose()
+      enemyCannonballMaterial.dispose()
       if (renderer) renderer.dispose()
     }
   }, [])

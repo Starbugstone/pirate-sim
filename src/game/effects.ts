@@ -1,6 +1,5 @@
 // @ts-nocheck
 import * as THREE from 'three'
-import { disposeMesh } from './helpers'
 import { getGerstnerDisplacement } from './ocean'
 
 export function createFire(scene: THREE.Scene, x: number, z: number) {
@@ -332,60 +331,76 @@ export function clearShipWakes(scene: THREE.Scene) {
   shipTrails.clear()
 }
 
-export function createCannonMuzzleFlash(scene: THREE.Scene, x: number, y: number, z: number, angle: number) {
-  const flashGroup = new THREE.Group()
-
-  const flashGeom = new THREE.SphereGeometry(0.6, 8, 8)
-  const flashMat = new THREE.MeshBasicMaterial({
-    color: 0xffaa00,
-    transparent: true,
-    opacity: 1.0
-  })
-  const flash = new THREE.Mesh(flashGeom, flashMat)
-  flashGroup.add(flash)
-
-  for (let i = 0; i < 4; i++) {
-    const smokeGeom = new THREE.SphereGeometry(0.5 + Math.random() * 0.4, 6, 6)
-    const smokeMat = new THREE.MeshBasicMaterial({
-      color: 0x888888,
-      transparent: true,
-      opacity: 0.6
-    })
-    const smoke = new THREE.Mesh(smokeGeom, smokeMat)
-    const offsetDist = 0.5 + Math.random() * 0.8
-    const offsetAngle = angle + (Math.random() - 0.5) * 0.8
-    smoke.position.set(
-      Math.sin(offsetAngle) * offsetDist,
-      (Math.random() - 0.5) * 0.3,
-      Math.cos(offsetAngle) * offsetDist
-    )
-    smoke.userData.vx = Math.sin(offsetAngle) * (2 + Math.random() * 2)
-    smoke.userData.vy = 0.5 + Math.random() * 1.0
-    smoke.userData.vz = Math.cos(offsetAngle) * (2 + Math.random() * 2)
-    smoke.userData.maxLife = 0.5 + Math.random() * 0.3
-    smoke.userData.life = smoke.userData.maxLife
-    flashGroup.add(smoke)
-  }
-
-  const flashLight = new THREE.PointLight(0xffaa22, 5, 20)
-  flashLight.position.set(0, 0, 0)
-  flashGroup.add(flashLight)
-
-  flashGroup.position.set(x, y, z)
-  scene.add(flashGroup)
-
-  return {
-    group: flashGroup,
-    light: flashLight,
-    life: 0.4,
-    maxLife: 0.4
-  }
-}
+const MAX_ACTIVE_MUZZLE_FLASHES = 24
+const muzzleFlashGeometry = new THREE.SphereGeometry(0.6, 6, 6)
+const muzzleFlashMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffaa00,
+  transparent: true,
+  opacity: 0.9,
+  depthWrite: false
+})
+const muzzleSmokeMaterial = new THREE.PointsMaterial({
+  color: 0x888888,
+  size: 0.85,
+  transparent: true,
+  opacity: 0.55,
+  depthWrite: false,
+  sizeAttenuation: true
+})
 
 const activeFlashes: any[] = []
 
-export function addMuzzleFlash(flash: any) {
-  activeFlashes.push(flash)
+function removeMuzzleFlash(scene: THREE.Scene, flash: any) {
+  scene.remove(flash.group)
+  flash.smoke.geometry.dispose()
+}
+
+export function createCannonMuzzleFlash(scene: THREE.Scene, position: THREE.Vector3, direction: THREE.Vector3) {
+  // A broadside can create many effects at once. Bound the count so overlapping
+  // player/enemy volleys cannot grow the render list without limit.
+  if (activeFlashes.length >= MAX_ACTIVE_MUZZLE_FLASHES) {
+    removeMuzzleFlash(scene, activeFlashes.shift())
+  }
+
+  const flashGroup = new THREE.Group()
+  const flash = new THREE.Mesh(muzzleFlashGeometry, muzzleFlashMaterial)
+  flashGroup.add(flash)
+
+  const smokePositions = new Float32Array(12)
+  const smokeVelocities = new Float32Array(12)
+  const fireDirection = direction.clone().normalize()
+  for (let i = 0; i < 4; i++) {
+    const offsetDist = 0.5 + Math.random() * 0.8
+    const spreadX = (Math.random() - 0.5) * 0.45
+    const spreadZ = (Math.random() - 0.5) * 0.45
+    const velocity = 2 + Math.random() * 2
+    const offset = i * 3
+    smokePositions[offset] = fireDirection.x * offsetDist + spreadX
+    smokePositions[offset + 1] = (Math.random() - 0.5) * 0.3
+    smokePositions[offset + 2] = fireDirection.z * offsetDist + spreadZ
+    smokeVelocities[offset] = (fireDirection.x + spreadX) * velocity
+    smokeVelocities[offset + 1] = 0.5 + Math.random()
+    smokeVelocities[offset + 2] = (fireDirection.z + spreadZ) * velocity
+  }
+
+  const smokeGeometry = new THREE.BufferGeometry()
+  smokeGeometry.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3))
+  const smoke = new THREE.Points(smokeGeometry, muzzleSmokeMaterial)
+  flashGroup.add(smoke)
+
+  flashGroup.position.copy(position)
+  scene.add(flashGroup)
+
+  const effect = {
+    group: flashGroup,
+    flash,
+    smoke,
+    smokeVelocities,
+    life: 0.4,
+    maxLife: 0.4
+  }
+  activeFlashes.push(effect)
+  return effect
 }
 
 export function updateMuzzleFlashes(scene: THREE.Scene, dt: number) {
@@ -393,26 +408,26 @@ export function updateMuzzleFlashes(scene: THREE.Scene, dt: number) {
     const flash = activeFlashes[i]
     flash.life -= dt
 
-    if (flash.light) {
-      flash.light.intensity = (flash.life / flash.maxLife) * 5
-    }
+    const lifeRatio = Math.max(0, flash.life / flash.maxLife)
+    flash.flash.scale.setScalar(lifeRatio)
 
-    flash.group.children.forEach((child: any) => {
-      if (child.userData.vx !== undefined) {
-        child.position.x += child.userData.vx * dt
-        child.position.y += child.userData.vy * dt
-        child.position.z += child.userData.vz * dt
-        child.userData.life -= dt
-        if (child.material) {
-          child.material.opacity = Math.max(0, child.userData.life / child.userData.maxLife) * 0.6
-        }
-      }
-    })
+    const positions = flash.smoke.geometry.attributes.position.array
+    for (let p = 0; p < positions.length; p += 3) {
+      positions[p] += flash.smokeVelocities[p] * dt
+      positions[p + 1] += flash.smokeVelocities[p + 1] * dt
+      positions[p + 2] += flash.smokeVelocities[p + 2] * dt
+    }
+    flash.smoke.geometry.attributes.position.needsUpdate = true
+    flash.smoke.scale.setScalar(1 + (1 - lifeRatio) * 0.8)
 
     if (flash.life <= 0) {
-      scene.remove(flash.group)
-      disposeMesh(flash.group)
+      removeMuzzleFlash(scene, flash)
       activeFlashes.splice(i, 1)
     }
   }
+}
+
+export function clearMuzzleFlashes(scene: THREE.Scene) {
+  for (const flash of activeFlashes) removeMuzzleFlash(scene, flash)
+  activeFlashes.length = 0
 }

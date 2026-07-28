@@ -13,7 +13,7 @@ import { normalizeAngle, shortestAngleDelta } from './helpers'
 import { createOcean, updateOcean, getOceanHeight, createSprayPool, emitSpray, updateSpray } from './ocean'
 import { createPlayerShip as buildPlayerShip, createEnemyShipMesh } from './ships'
 import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
-import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake } from './effects'
+import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, createCannonMuzzleFlash, updateMuzzleFlashes } from './effects'
 import { createAmbientFish, updateAmbientFish } from './ambientFish'
 const makeRef = (value) => ({ value })
 const computed = (getter) => ({
@@ -498,7 +498,14 @@ function init() {
 
 
 function createPlayerShipLocal() {
-  playerShip = buildPlayerShip()
+  const oldPos = playerShip ? playerShip.position.clone() : new THREE.Vector3(0, 0, 0)
+  const oldRotY = playerShip ? playerShip.rotation.y : playerAngle
+  const oldRotZ = playerShip ? playerShip.rotation.z : 0
+  if (playerShip) scene.remove(playerShip)
+  playerShip = buildPlayerShip(playerUpgrades.value)
+  playerShip.position.copy(oldPos)
+  playerShip.rotation.y = oldRotY
+  playerShip.rotation.z = oldRotZ
   scene.add(playerShip)
 }
 
@@ -1196,56 +1203,82 @@ function fireCannon(side) {
   }
 
   const angle = playerAngle
-
-  // Determine which side(s) to fire
   let sidesToFire = []
-  if (side === 'port') sidesToFire = [-1] // Left
-  else if (side === 'starboard') sidesToFire = [1] // Right
-  else sidesToFire = [-1, 1] // Both
+  if (side === 'port') sidesToFire = ['port']
+  else if (side === 'starboard') sidesToFire = ['starboard']
+  else sidesToFire = ['port', 'starboard']
 
-  // Number of cannons per broadside based on upgrade
-  const numCannons = 3 + playerUpgrades.value.cannonCount * 2
+  const muzzleWorldPos = new THREE.Vector3()
+  const muzzleDir = new THREE.Vector3()
 
-  for (const sideVal of sidesToFire) {
-    // Fire cannons with cone spread - count scales with upgrade
-    const sidePositions = []
-    for (let c = 0; c < numCannons; c++) {
-      sidePositions.push(-2 + (4 / (numCannons - 1 || 1)) * c)
-    }
-    for (let i = 0; i < sidePositions.length; i++) {
-      const zOffset = sidePositions[i]
-      // Calculate cone angle: front cannon fires forward, back fires backward
-      // Mirror between sides: port (-1) and starboard (+1)
-      // port: front = forward (+), back = backward (-)
-      // starboard: front = forward (+), back = backward (-)
-      const coneAngle = sideVal * (1 - i) * (10 * Math.PI / 180) // Mirrored per side
+  sidesToFire.forEach(sideKey => {
+    const sideSign = sideKey === 'port' ? -1 : 1
+    const cannonsList = playerShip && playerShip.userData && playerShip.userData[`${sideKey}Cannons`]
 
-      const ballGeometry = new THREE.SphereGeometry(0.35, 8, 8)
-      const ballMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 })
-      const ball = new THREE.Mesh(ballGeometry, ballMaterial)
+    if (cannonsList && cannonsList.length > 0) {
+      cannonsList.forEach((cEntry, idx) => {
+        if (cEntry.mesh) {
+          cEntry.mesh.getWorldPosition(muzzleWorldPos)
+        } else {
+          const sideOffset = sideSign * 3.4
+          const zOffset = cEntry.zOffset || 0
+          muzzleWorldPos.set(
+            playerPos.value.x + Math.sin(angle) * zOffset + Math.sin(angle + sideSign * Math.PI / 2) * sideOffset,
+            2.6,
+            playerPos.value.z + Math.cos(angle) * zOffset + Math.cos(angle + sideSign * Math.PI / 2) * sideOffset
+          )
+        }
 
-      const sideOffset = sideVal * 2
-      ball.position.set(
-        playerPos.value.x + Math.sin(angle) * zOffset + Math.sin(angle + sideVal * Math.PI / 2) * sideOffset,
-        2,
-        playerPos.value.z + Math.cos(angle) * zOffset + Math.cos(angle + sideVal * Math.PI / 2) * sideOffset
-      )
+        const coneAngle = sideSign * (1 - idx) * (5 * Math.PI / 180)
+        const fireAngle = angle + sideSign * Math.PI / 2 + coneAngle
+        muzzleDir.set(Math.sin(fireAngle), 0, Math.cos(fireAngle)).normalize()
 
-      const speed = 40
-      // Add cone angle to firing direction
-      const fireAngle = angle + sideVal * Math.PI / 2 + coneAngle
-      cannonballs.push({
-        mesh: ball,
-        vx: Math.sin(fireAngle) * speed,
-        vz: Math.cos(fireAngle) * speed,
-        life: 3,
-        isPlayer: true,
-        spawnTime: Date.now()
+        // Create muzzle flash particle & smoke burst at cannon muzzle
+        createCannonMuzzleFlash(scene, muzzleWorldPos.clone(), muzzleDir.clone())
+
+        const ballGeometry = new THREE.SphereGeometry(0.35, 8, 8)
+        const ballMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.3 })
+        const ball = new THREE.Mesh(ballGeometry, ballMaterial)
+        ball.position.copy(muzzleWorldPos)
+
+        const speed = 42
+        cannonballs.push({
+          mesh: ball,
+          vx: muzzleDir.x * speed,
+          vz: muzzleDir.z * speed,
+          life: 3,
+          isPlayer: true,
+          spawnTime: Date.now()
+        })
+        scene.add(ball)
       })
+    } else {
+      const numCannons = 3 + playerUpgrades.value.cannonCount * 2
+      for (let c = 0; c < numCannons; c++) {
+        const zOffset = -4 + (8 / (numCannons - 1 || 1)) * c
+        const fireAngle = angle + sideSign * Math.PI / 2
+        muzzleWorldPos.set(
+          playerPos.value.x + Math.sin(angle) * zOffset + Math.sin(angle + sideSign * Math.PI / 2) * 3.4,
+          2.6,
+          playerPos.value.z + Math.cos(angle) * zOffset + Math.cos(angle + sideSign * Math.PI / 2) * 3.4
+        )
+        muzzleDir.set(Math.sin(fireAngle), 0, Math.cos(fireAngle)).normalize()
+        createCannonMuzzleFlash(scene, muzzleWorldPos.clone(), muzzleDir.clone())
 
-      scene.add(ball)
+        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), new THREE.MeshStandardMaterial({ color: 0x111111 }))
+        ball.position.copy(muzzleWorldPos)
+        cannonballs.push({
+          mesh: ball,
+          vx: muzzleDir.x * 42,
+          vz: muzzleDir.z * 42,
+          life: 3,
+          isPlayer: true,
+          spawnTime: Date.now()
+        })
+        scene.add(ball)
+      }
     }
-  }
+  })
 
   const sideName = side === 'port' ? 'PORT (LEFT)' : (side === 'starboard' ? 'STARBOARD (RIGHT)' : 'BROADSIDE')
   showMessage(`${sideName} broadside fired`, 1000)
@@ -1260,44 +1293,38 @@ function fireEnemyCannon() {
 
 function fireEnemyCannonMulti(enemy, shipType, enemyIndex) {
   const angle = enemy.angle
+  const mesh = enemyShipMeshes[enemyIndex]
 
-  if (shipType === SHIP_TYPES.NORMAL) {
-    // Normal ship fires 1 cannon straight ahead
-    const ballGeom = new THREE.SphereGeometry(0.35, 8, 8)
-    const ballMat = new THREE.MeshBasicMaterial({ color: 0x000000 })
-    const ball = new THREE.Mesh(ballGeom, ballMat)
-    ball.position.set(enemy.x, 2, enemy.z)
+  const sides = (shipType === SHIP_TYPES.NORMAL) ? [Math.random() > 0.5 ? 'port' : 'starboard'] : ['port', 'starboard']
+  const muzzlePos = new THREE.Vector3()
+  const muzzleDir = new THREE.Vector3()
 
-    const speed = 35
-    cannonballs.push({
-      mesh: ball,
-      vx: Math.sin(angle) * speed,
-      vz: Math.cos(angle) * speed,
-      life: 3,
-      isEnemy: true,
-      spawnTime: Date.now(),
-      damage: shipType.cannonDamage,
-      sourceIndex: enemyIndex
-    })
-    scene.add(ball)
-  } else if (shipType === SHIP_TYPES.BIG) {
-    // Big ship fires 2 cannons from each side (broadside)
-    for (let side = -1; side <= 1; side += 2) {
-      for (let offset = -1; offset <= 1; offset += 2) {
-        const ballGeom = new THREE.SphereGeometry(0.4, 8, 8)
-        const ballMat = new THREE.MeshBasicMaterial({ color: 0x000000 })
-        const ball = new THREE.Mesh(ballGeom, ballMat)
-        ball.position.set(
-          enemy.x + Math.sin(angle + side * Math.PI / 2) * offset * 2,
-          2,
-          enemy.z + Math.cos(angle + side * Math.PI / 2) * offset * 2
-        )
+  sides.forEach(sideKey => {
+    const sideSign = sideKey === 'port' ? -1 : 1
+    const cannons = mesh && mesh.userData && mesh.userData[`${sideKey}Cannons`]
 
-        const speed = 30
+    if (cannons && cannons.length > 0) {
+      cannons.forEach(c => {
+        if (c.mesh) {
+          c.mesh.getWorldPosition(muzzlePos)
+        } else {
+          muzzlePos.set(
+            enemy.x + Math.sin(angle + sideSign * Math.PI / 2) * 2.5,
+            2.5,
+            enemy.z + Math.cos(angle + sideSign * Math.PI / 2) * 2.5
+          )
+        }
+
+        const fireAngle = angle + sideSign * Math.PI / 2
+        muzzleDir.set(Math.sin(fireAngle), 0, Math.cos(fireAngle))
+        createCannonMuzzleFlash(scene, muzzlePos.clone(), muzzleDir.clone())
+
+        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), new THREE.MeshBasicMaterial({ color: 0x222222 }))
+        ball.position.copy(muzzlePos)
         cannonballs.push({
           mesh: ball,
-          vx: Math.sin(angle + side * Math.PI / 2) * speed,
-          vz: Math.cos(angle + side * Math.PI / 2) * speed,
+          vx: muzzleDir.x * 35,
+          vz: muzzleDir.z * 35,
           life: 3,
           isEnemy: true,
           spawnTime: Date.now(),
@@ -1305,10 +1332,27 @@ function fireEnemyCannonMulti(enemy, shipType, enemyIndex) {
           sourceIndex: enemyIndex
         })
         scene.add(ball)
-      }
+      })
+    } else {
+      muzzlePos.set(enemy.x, 2.5, enemy.z)
+      muzzleDir.set(Math.sin(angle), 0, Math.cos(angle))
+      createCannonMuzzleFlash(scene, muzzlePos.clone(), muzzleDir.clone())
+
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), new THREE.MeshBasicMaterial({ color: 0x222222 }))
+      ball.position.copy(muzzlePos)
+      cannonballs.push({
+        mesh: ball,
+        vx: muzzleDir.x * 35,
+        vz: muzzleDir.z * 35,
+        life: 3,
+        isEnemy: true,
+        spawnTime: Date.now(),
+        damage: shipType.cannonDamage,
+        sourceIndex: enemyIndex
+      })
+      scene.add(ball)
     }
-  }
-  // Rammers don't shoot - they ram!
+  })
 }
 
 function updateCannonballs(dt) {
@@ -1787,6 +1831,9 @@ function buyUpgrade(type) {
   gold.value -= cost
   playerUpgrades.value[type] = nextLevel
   showShopMessage(`Upgraded ${type} to level ${nextLevel}`)
+
+  // Rebuild player ship model so new visual upgrades appear immediately!
+  createPlayerShipLocal()
 }
 
 function closeShop() {
@@ -1813,60 +1860,87 @@ function getWindDirection() {
 
 // Animate sails based on wind
 function animateSails(dt) {
-  if (!playerShip || !playerShip.userData.sails) return
-
   const time = Date.now() * 0.001
-  const windStrength = windSpeed.value / 6 // Normalize 0-1
 
-  // Calculate how aligned we are with wind (1 = perfect tailwind, -1 = perfect headwind)
-  const windAlignment = Math.cos(windAngle - playerAngle)
-  // Positive = wind behind, Negative = wind in front
-  const windBehind = Math.max(0, windAlignment) // 1 when wind behind, 0 when in front
-  const windAhead = Math.max(0, -windAlignment) // 1 when wind in front, 0 when behind
-
-  // More billowing when going fast with wind, less when slow/against wind
-  const speedFactor = playerSpeed.value / 15 // 0 to 1 based on speed
-
-  playerShip.userData.sails.forEach((sail, index) => {
-    if (!sail.userData.originalVertices || !sail.userData.fixedEdges) return
-
-    const positions = sail.geometry.attributes.position
-    const original = sail.userData.originalVertices
-    const fixedEdges = sail.userData.fixedEdges
-
+  // 1. Animate player topmast Jolly Roger flag fluttering
+  if (playerShip && playerShip.userData.flagMesh) {
+    const flagMesh = playerShip.userData.flagMesh
+    const positions = flagMesh.geometry.attributes.position
     for (let i = 0; i < positions.count; i++) {
-      // Skip vertices on top and bottom edges (attached to yards)
-      if (fixedEdges[i]) continue
-
-      const x = original[i * 3] // Horizontal position (-width/2 to +width/2)
-      const y = original[i * 3 + 1] // Vertical position
-
-      // x ranges from -width/2 to +width/2
-      // The sides (left and right edges) are free to billow
-      // distFromCenter: 0 at center (x=0), 1 at edges
-      const width = 5.5 / 2 // approximate
-      const distFromCenter = Math.abs(x) / width
-
-      // === WIND BEHIND = FULL BELLY, CURVED SHAPE ===
-      // Maximum billow when wind is behind and we're moving fast
-      // Billow in X direction (sideways from the mast)
-      const maxBillow = windBehind * windStrength * (1.5 + speedFactor * 1.0)
-      // Curved billow - full in middle, less at corners (parabolic)
-      // Only the vertical sides billow, not top/bottom
-      const curvedBillow = Math.pow(distFromCenter, 1.5) * maxBillow * 2
-
-      // === WIND IN FRONT = FLUTTER, ALMOST NO VOLUME ===
-      // Sails luff and flutter when wind is against
-      const flutterAmount = windAhead * 0.25 * (0.2 + speedFactor * 0.3)
-      const flutter = Math.sin(time * 8 + y * 0.5 + index * 2) * flutterAmount
-
-      // Apply billow to X axis (sideways billow)
-      // Sign matches x direction so both sides billow outward
-      const direction = x >= 0 ? 1 : -1
-      positions.array[i * 3] = x + direction * curvedBillow + flutter
+      const x = positions.getX(i)
+      const wave = Math.sin(time * 14 - x * 4) * 0.18 * Math.max(0, x)
+      positions.setZ(i, wave)
     }
-
     positions.needsUpdate = true
+  }
+
+  // 2. Animate player ship sails and yard trim
+  if (playerShip && playerShip.userData.sails) {
+    const windStrength = windSpeed.value / 6 // 0-1
+    const angleDelta = shortestAngleDelta(playerAngle, windAngle)
+    const windAlignment = Math.cos(angleDelta) // 1 = tailwind, -1 = headwind
+    const isHeadwind = windAlignment < -0.65 // No-Go Zone
+
+    // Yard Trim: Yardarms pivot up to +-60 deg to catch wind
+    const targetYardRotation = Math.max(-1.0, Math.min(1.0, angleDelta * 0.5))
+
+    playerShip.userData.sails.forEach((sail, index) => {
+      // Trim yard group
+      if (sail.userData.yardGroup) {
+        sail.userData.yardGroup.rotation.y += (targetYardRotation - sail.userData.yardGroup.rotation.y) * 3.0 * dt
+      }
+
+      if (!sail.userData.originalVertices || !sail.userData.fixedEdges) return
+
+      const positions = sail.geometry.attributes.position
+      const original = sail.userData.originalVertices
+      const fixedEdges = sail.userData.fixedEdges
+
+      for (let i = 0; i < positions.count; i++) {
+        if (fixedEdges[i]) continue
+
+        const x = original[i * 3]
+        const y = original[i * 3 + 1]
+
+        const normX = x / 4.0
+        const normY = y / 4.0
+
+        if (isHeadwind) {
+          // No-Go Zone: Luffing / Violent Fluttering
+          const flutter = Math.sin(time * 16 + y * 2.0 + index * 3.0) * 0.35 * (1 - Math.abs(normY))
+          positions.array[i * 3 + 2] = flutter
+          positions.array[i * 3] = x + Math.cos(time * 12 + y) * 0.12
+        } else {
+          // Wind Catching: Dynamic 3D Aerofoil Billow
+          const billowDepth = (0.8 + windStrength * 1.4) * (1 - normY * normY) * Math.max(0.2, (windAlignment + 1) / 2)
+          const ripple = Math.sin(time * 8 + y * 1.5 + x * 2.0) * 0.08 * (1 - Math.abs(normY))
+          positions.array[i * 3 + 2] = billowDepth + ripple
+          positions.array[i * 3] = x * (1 + billowDepth * 0.08)
+        }
+      }
+
+      positions.needsUpdate = true
+    })
+  }
+
+  // 3. Animate AI enemy ship sails
+  enemyShipMeshes.forEach(mesh => {
+    if (mesh && mesh.userData.sails) {
+      mesh.userData.sails.forEach(sail => {
+        if (!sail.userData.originalVertices || !sail.userData.fixedEdges) return
+        const positions = sail.geometry.attributes.position
+        const original = sail.userData.originalVertices
+        const fixedEdges = sail.userData.fixedEdges
+        for (let i = 0; i < positions.count; i++) {
+          if (fixedEdges[i]) continue
+          const x = original[i * 3]
+          const y = original[i * 3 + 1]
+          const billow = Math.sin(time * 4 + y) * 0.2
+          positions.array[i * 3 + 2] = 0.4 + billow
+        }
+        positions.needsUpdate = true
+      })
+    }
   })
 
   // Update treasure
@@ -2165,8 +2239,16 @@ function updateMinimap() {
 
 function update(dt) {
   processDisposalQueue()
+  updateMuzzleFlashes(scene, dt)
 
-  oceanTime += dt
+  // Dynamic Ship Roll/Heel based on crosswind force & turning inertia
+  if (playerShip) {
+    const angleDelta = shortestAngleDelta(playerAngle, windAngle)
+    const crosswindForce = Math.sin(angleDelta) * (windSpeed.value / 6)
+    const turnInertia = mouseDeltaX * 12.0
+    const targetRoll = -crosswindForce * 0.16 + turnInertia
+    playerShip.rotation.z += (targetRoll - playerShip.rotation.z) * 4.0 * dt
+  }
   if (oceanMesh) {
     updateOcean(oceanMesh, oceanTime, playerPos.value.x, playerPos.value.z, windAngle, windSpeed.value)
   }

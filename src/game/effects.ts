@@ -90,3 +90,108 @@ export function updateWakeParticles(scene: THREE.Scene, wakeArray, dt) {
     w.mesh.material.opacity = Math.min(0.4, w.life * 0.25)
   }
 }
+
+/**
+ * Creates dynamic cannon muzzle flash & billowy smoke burst at the exact firing position.
+ */
+
+interface MuzzleParticle {
+  mesh: THREE.Mesh
+  light?: THREE.PointLight
+  life: number
+  maxLife: number
+  vx: number
+  vy: number
+  vz: number
+  growth: number
+  isLight?: boolean
+}
+
+const muzzleParticles: MuzzleParticle[] = []
+
+export function createCannonMuzzleFlash(scene: THREE.Scene, pos: THREE.Vector3, dir: THREE.Vector3) {
+  // Bright orange point light flash
+  const flashLight = new THREE.PointLight(0xffaa22, 6, 12)
+  flashLight.position.copy(pos)
+  scene.add(flashLight)
+
+  muzzleParticles.push({
+    mesh: new THREE.Mesh(), // dummy for typing
+    light: flashLight,
+    life: 0.12,
+    maxLife: 0.12,
+    vx: 0, vy: 0, vz: 0, growth: 0,
+    isLight: true
+  })
+
+  // Muzzle Fire Sphere
+  const fireGeom = new THREE.SphereGeometry(0.5, 6, 6)
+  const fireMat = new THREE.MeshBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.9 })
+  const fireMesh = new THREE.Mesh(fireGeom, fireMat)
+  fireMesh.position.copy(pos)
+  scene.add(fireMesh)
+
+  muzzleParticles.push({
+    mesh: fireMesh,
+    life: 0.15,
+    maxLife: 0.15,
+    vx: dir.x * 3,
+    vy: 0.5,
+    vz: dir.z * 3,
+    growth: 4.0
+  })
+
+  // Billowy Smoke Clouds
+  const smokeGeom = new THREE.SphereGeometry(0.6, 6, 6)
+  for (let i = 0; i < 3; i++) {
+    const smokeMat = new THREE.MeshBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.5 })
+    const smokeMesh = new THREE.Mesh(smokeGeom, smokeMat)
+    smokeMesh.position.copy(pos).add(new THREE.Vector3(
+      (Math.random() - 0.5) * 0.4,
+      (Math.random() - 0.5) * 0.4,
+      (Math.random() - 0.5) * 0.4
+    ))
+    scene.add(smokeMesh)
+
+    muzzleParticles.push({
+      mesh: smokeMesh,
+      life: 0.35 + Math.random() * 0.2,
+      maxLife: 0.5,
+      vx: dir.x * (4 + Math.random() * 3) + (Math.random() - 0.5) * 1.5,
+      vy: 1.0 + Math.random() * 1.0,
+      vz: dir.z * (4 + Math.random() * 3) + (Math.random() - 0.5) * 1.5,
+      growth: 3.5
+    })
+  }
+}
+
+export function updateMuzzleFlashes(scene: THREE.Scene, dt: number) {
+  for (let i = muzzleParticles.length - 1; i >= 0; i--) {
+    const p = muzzleParticles[i]
+    p.life -= dt
+
+    if (p.isLight && p.light) {
+      p.light.intensity = Math.max(0, (p.life / p.maxLife) * 6)
+      if (p.life <= 0) {
+        scene.remove(p.light)
+        p.light.dispose()
+        muzzleParticles.splice(i, 1)
+      }
+      continue
+    }
+
+    if (p.life <= 0) {
+      disposeMesh(p.mesh, scene)
+      muzzleParticles.splice(i, 1)
+      continue
+    }
+
+    p.mesh.position.x += p.vx * dt
+    p.mesh.position.y += p.vy * dt
+    p.mesh.position.z += p.vz * dt
+    p.mesh.scale.addScalar(p.growth * dt)
+    if (p.mesh.material) {
+      p.mesh.material.opacity = (p.life / p.maxLife) * 0.6
+    }
+  }
+}

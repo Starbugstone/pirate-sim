@@ -10,7 +10,7 @@ import {
   ENEMY_ALERT_DIST, ENEMY_ATTACK_DIST
 } from './constants'
 import { normalizeAngle, shortestAngleDelta } from './helpers'
-import { createOcean, updateOcean, getOceanHeight, createSprayPool, emitSpray, updateSpray } from './ocean'
+import { createOcean, updateOcean, getOceanHeight, getGerstnerDisplacement, createSprayPool, emitSpray, updateSpray } from './ocean'
 import { createPlayerShip as buildPlayerShip, createEnemyShipMesh } from './ships'
 import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
 import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, createCannonMuzzleFlash, updateMuzzleFlashes } from './effects'
@@ -2494,19 +2494,18 @@ function update(dt) {
   playerShip.position.x = px
   playerShip.position.z = pz
 
-  const hCenter = getOceanHeight(px, pz, oceanTime, windAngle, windSpeed.value)
+  const dispCenter = getGerstnerDisplacement(px, pz, oceanTime)
   const bowOff = 6, sideOff = 3
-  const hBow   = getOceanHeight(px + Math.sin(playerAngle) * bowOff,  pz - Math.cos(playerAngle) * bowOff, oceanTime, windAngle, windSpeed.value)
-  const hStern = getOceanHeight(px - Math.sin(playerAngle) * bowOff,  pz + Math.cos(playerAngle) * bowOff, oceanTime, windAngle, windSpeed.value)
-  const hPort  = getOceanHeight(px - Math.cos(playerAngle) * sideOff, pz - Math.sin(playerAngle) * sideOff, oceanTime, windAngle, windSpeed.value)
-  const hStbd  = getOceanHeight(px + Math.cos(playerAngle) * sideOff, pz + Math.sin(playerAngle) * sideOff, oceanTime, windAngle, windSpeed.value)
+  const dispBow   = getGerstnerDisplacement(px + Math.sin(playerAngle) * bowOff,  pz + Math.cos(playerAngle) * bowOff, oceanTime)
+  const dispStern = getGerstnerDisplacement(px - Math.sin(playerAngle) * bowOff,  pz - Math.cos(playerAngle) * bowOff, oceanTime)
+  const dispPort  = getGerstnerDisplacement(px - Math.cos(playerAngle) * sideOff, pz + Math.sin(playerAngle) * sideOff, oceanTime)
+  const dispStbd  = getGerstnerDisplacement(px + Math.cos(playerAngle) * sideOff, pz - Math.sin(playerAngle) * sideOff, oceanTime)
 
-  const inertiaDampen = 0.45 // Heavy galleons cut through steep waves instead of surfing them perfectly
-  const speedDampen = 1.0 / (1.0 + playerSpeed.value * 0.025)
-  playerShip.position.y = hCenter * inertiaDampen * speedDampen
+  const draftOffset = -0.25
+  playerShip.position.y = dispCenter.y + draftOffset
 
-  const pitch = Math.atan2((hBow - hStern) * inertiaDampen * speedDampen, bowOff * 2) * 2.2
-  const roll  = Math.atan2((hPort - hStbd) * inertiaDampen * speedDampen, sideOff * 2) * 2.0
+  const pitch = Math.atan2(dispBow.y - dispStern.y, bowOff * 2) * 1.5
+  const roll  = Math.atan2(dispPort.y - dispStbd.y, sideOff * 2) * 1.2
   playerShip.rotation.x = pitch
   playerShip.rotation.z = roll
   playerShip.rotation.y = playerAngle
@@ -2514,7 +2513,7 @@ function update(dt) {
   // Emit bow spray when moving through waves
   if (sprayPool) {
     const spd = playerSpeed.value
-    const waveSlam = Math.max(0, -(hBow - hStern)) * spd * 0.02
+    const waveSlam = Math.max(0, -(dispBow.y - dispStern.y)) * spd * 0.02
     if (spd > 3) {
       const sprayChance = (spd - 3) * 0.035 + waveSlam
       if (Math.random() < sprayChance) {
@@ -2699,8 +2698,8 @@ function update(dt) {
     enemy.x += Math.sin(enemy.angle) * enemySpeed * dt
     enemy.z += Math.cos(enemy.angle) * enemySpeed * dt
 
-    // Enemy wake
-    if (enemySpeed > 2 && Math.random() < 0.1) {
+    // Enemy wake trail
+    if (enemySpeed > 0.5) {
       emitWake(scene, playerWake, enemy.x, enemy.z, enemy.angle, true)
     }
 
@@ -2723,17 +2722,18 @@ function update(dt) {
     // Update mesh — bob on waves
     mesh.position.x = enemy.x
     mesh.position.z = enemy.z
-    const inertiaDampen = 0.45
-    const eH = getOceanHeight(enemy.x, enemy.z, oceanTime, windAngle, windSpeed.value)
-    mesh.position.y = eH * inertiaDampen
+    const dispEnemy = getGerstnerDisplacement(enemy.x, enemy.z, oceanTime)
     const eFwd = 4 * (shipType.size || 1)
     const eSide = 2 * (shipType.size || 1)
-    const eHBow  = getOceanHeight(enemy.x + Math.sin(enemy.angle) * eFwd, enemy.z - Math.cos(enemy.angle) * eFwd, oceanTime, windAngle, windSpeed.value)
-    const eHStern = getOceanHeight(enemy.x - Math.sin(enemy.angle) * eFwd, enemy.z + Math.cos(enemy.angle) * eFwd, oceanTime, windAngle, windSpeed.value)
-    const eHPort  = getOceanHeight(enemy.x - Math.cos(enemy.angle) * eSide, enemy.z - Math.sin(enemy.angle) * eSide, oceanTime, windAngle, windSpeed.value)
-    const eHStbd  = getOceanHeight(enemy.x + Math.cos(enemy.angle) * eSide, enemy.z + Math.sin(enemy.angle) * eSide, oceanTime, windAngle, windSpeed.value)
-    mesh.rotation.x = Math.atan2((eHBow - eHStern) * inertiaDampen, eFwd * 2) * 1.8
-    mesh.rotation.z = Math.atan2((eHPort - eHStbd) * inertiaDampen, eSide * 2) * 1.6
+    const eHBow   = getGerstnerDisplacement(enemy.x + Math.sin(enemy.angle) * eFwd, enemy.z + Math.cos(enemy.angle) * eFwd, oceanTime).y
+    const eHStern = getGerstnerDisplacement(enemy.x - Math.sin(enemy.angle) * eFwd, enemy.z - Math.cos(enemy.angle) * eFwd, oceanTime).y
+    const eHPort  = getGerstnerDisplacement(enemy.x - Math.cos(enemy.angle) * eSide, enemy.z + Math.sin(enemy.angle) * eSide, oceanTime).y
+    const eHStbd  = getGerstnerDisplacement(enemy.x + Math.cos(enemy.angle) * eSide, enemy.z - Math.sin(enemy.angle) * eSide, oceanTime).y
+
+    const draftOffset = -0.25
+    mesh.position.y = dispEnemy.y + draftOffset
+    mesh.rotation.x = Math.atan2(eHBow - eHStern, eFwd * 2) * 1.5
+    mesh.rotation.z = Math.atan2(eHPort - eHStbd, eSide * 2) * 1.2
     mesh.rotation.y = enemy.angle
 
     // Animate enemy sails
@@ -3102,15 +3102,10 @@ function update(dt) {
   if (starboardCooldown.value > 0) starboardCooldown.value -= dt
 
   // === SHIP WAKE TRAIL ===
-  // Spawn wake particles based on speed
-  if (playerSpeed.value > 1) {
-    // Spawn rate based on speed
-    const spawnChance = playerSpeed.value / 20
-    if (Math.random() < spawnChance) {
-      emitWake(scene, playerWake, playerPos.value.x, playerPos.value.z, playerAngle, false)
-    }
+  if (playerSpeed.value > 0.5) {
+    emitWake(scene, playerWake, playerPos.value.x, playerPos.value.z, playerAngle, false)
   }
-  tickWake(scene, playerWake, dt)
+  tickWake(scene, playerWake, dt, oceanTime, windAngle, windSpeed.value)
 
   // Update GPU wind particles every frame via uniforms only.
   updateWindParticles(dt)

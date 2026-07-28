@@ -301,9 +301,9 @@ export function generateIslandMesh(
   terrainMesh.castShadow = true
   group.add(terrainMesh)
 
-  // ── 5. Shallow Turquoise Reef Apron & Shoreline Foam ──
-  const reefGroup = createReefApron(radius, archetype)
-  group.add(reefGroup)
+  // ── 5. Organic Shoreline Washing Foam (Conforms to coastline) ──
+  const foamGroup = createShorelineFoam(radius, heightmapFn)
+  group.add(foamGroup)
 
   // Determine best dock spot if applicable (PirateBay or TreasureCay)
   if (beachPoints.length > 0 && (archetype === IslandArchetype.PirateBay || archetype === IslandArchetype.TreasureCay)) {
@@ -321,40 +321,132 @@ export function generateIslandMesh(
   }
 }
 
-// ── 6. Shallow Turquoise Reef & Shoreline Foam Mesh ──
-function createReefApron(islandRadius: number, archetype: IslandArchetype): THREE.Group {
-  const reefGroup = new THREE.Group()
+// ── 6. Organic Shoreline Washing Foam ──
+const shoreFoamMaterial = new THREE.ShaderMaterial({
+  vertexShader: `
+    varying vec2 vUv;
+    varying vec3 vWorldPos;
+    void main() {
+      vUv = uv;
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime;
+    varying vec2 vUv;
+    varying vec3 vWorldPos;
 
-  // Outer Turquoise Reef Skirt
-  const reefRadius = islandRadius * 1.35
-  const reefGeom = new THREE.RingGeometry(islandRadius * 0.4, reefRadius, 48, 8)
-  reefGeom.rotateX(-Math.PI / 2)
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
 
-  const reefMat = new THREE.MeshBasicMaterial({
-    color: 0x00e5ff, // Bright Caribbean turquoise cyan
-    transparent: true,
-    opacity: 0.45,
-    side: THREE.DoubleSide,
-    depthWrite: false
-  })
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash(i);
+      float b = hash(i + vec2(1.0, 0.0));
+      float c = hash(i + vec2(0.0, 1.0));
+      float d = hash(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
 
-  const reefMesh = new THREE.Mesh(reefGeom, reefMat)
-  reefMesh.position.y = 0.12 // Just below water surface
-  reefGroup.add(reefMesh)
+    float fbm(vec2 p) {
+      float f = 0.0;
+      float w = 0.5;
+      for (int i = 0; i < 3; i++) {
+        f += w * noise(p);
+        p *= 2.0;
+        w *= 0.5;
+      }
+      return f;
+    }
 
-  // Shoreline White Foam Ring
-  const foamGeom = new THREE.RingGeometry(islandRadius * 0.72, islandRadius * 0.88, 64)
-  foamGeom.rotateX(-Math.PI / 2)
-  const foamMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.35,
-    side: THREE.DoubleSide,
-    depthWrite: false
-  })
-  const foamMesh = new THREE.Mesh(foamGeom, foamMat)
-  foamMesh.position.y = 0.18
-  reefGroup.add(foamMesh)
+    void main() {
+      // Shore wave washing pulse
+      float wavePulse = sin(uTime * 1.8 - vUv.x * 25.0) * 0.5 + 0.5;
+      vec2 p = vWorldPos.xz * 0.12 + vec2(uTime * 0.04, wavePulse * 0.12);
+      float n = fbm(p * 3.0);
 
-  return reefGroup
+      // Foam profile across the shoreline strip
+      float edgeFade = sin(vUv.y * 3.14159);
+      float foam = smoothstep(0.32, 0.68, n + wavePulse * 0.3) * edgeFade;
+
+      vec3 foamColor = vec3(0.96, 0.99, 1.0);
+      gl_FragColor = vec4(foamColor, foam * 0.70);
+    }
+  `,
+  uniforms: {
+    uTime: { value: 0 }
+  },
+  transparent: true,
+  side: THREE.DoubleSide,
+  depthWrite: false
+})
+
+function createShorelineFoam(
+  islandRadius: number,
+  heightmapFn: (x: number, z: number) => number
+): THREE.Group {
+  const group = new THREE.Group()
+
+  const numRays = 120
+  const positions: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  for (let i = 0; i <= numRays; i++) {
+    const angle = (i / numRays) * Math.PI * 2
+    const cosA = Math.cos(angle)
+    const sinA = Math.sin(angle)
+
+    // Find shoreline boundary (where heightmap crosses y ≈ 0)
+    let rShore = islandRadius * 0.7
+    for (let r = islandRadius * 0.2; r <= islandRadius * 1.1; r += 2.0) {
+      const h = heightmapFn(r * cosA, r * sinA)
+      if (h <= 0.2) {
+        rShore = r
+        break
+      }
+    }
+
+    const rInner = Math.max(2.0, rShore - 3.0)
+    const rOuter = rShore + 7.0
+
+    const xInner = rInner * cosA
+    const zInner = rInner * sinA
+    const xOuter = rOuter * cosA
+    const zOuter = rOuter * sinA
+
+    positions.push(xInner, 0.14, zInner)
+    positions.push(xOuter, 0.14, zOuter)
+
+    const u = i / numRays
+    uvs.push(u, 0)
+    uvs.push(u, 1)
+  }
+
+  for (let i = 0; i < numRays; i++) {
+    const i2 = i * 2
+    indices.push(i2, i2 + 1, i2 + 2)
+    indices.push(i2 + 1, i2 + 3, i2 + 2)
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+
+  const mesh = new THREE.Mesh(geometry, shoreFoamMaterial.clone())
+  mesh.renderOrder = 1
+  mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, _material, _group) => {
+    ;(mesh.material as THREE.ShaderMaterial).uniforms.uTime.value = performance.now() * 0.001
+  }
+  group.add(mesh)
+
+  return group
 }
+

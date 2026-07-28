@@ -551,7 +551,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
 
   ship.userData.sails = sails
 
-  // === 8. DYNAMIC JOLLY ROGER PIRATE FLAG ON TOPMAST PEAK ===
+  // === 8. DYNAMIC JOLLY ROGER PIRATE FLAG ATTACHED TO MAIN TOPMAST ===
   const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 3.5, 6), mastMat)
   flagPole.position.set(0, 22.0, -0.5)
   ship.add(flagPole)
@@ -566,6 +566,7 @@ export function createPlayerShip(upgrades: any = {}): THREE.Group {
   const jollyTexture = getJollyRogerFlagTexture()
   const flagMat = new THREE.MeshPhongMaterial({ map: jollyTexture, side: THREE.DoubleSide })
   const flagMesh = new THREE.Mesh(flagGeom, flagMat)
+  // Left edge anchored at mast center (0,0,0) inside flagGroup
   flagMesh.position.set(1.5, 0, 0)
   flagGroup.add(flagMesh)
 
@@ -610,14 +611,12 @@ export function createEnemyShipMesh(shipType: any): THREE.Group {
 function createNavalSloopMesh(scale: number): THREE.Group {
   const mesh = new THREE.Group()
 
-  // Royal Navy Paint Scheme: Navy Blue Upper Hull, White Waterline, Gold Accents
   const darkHullMat = new THREE.MeshPhongMaterial({ color: 0x0c1b33 }) // Royal Navy Blue
   const deckMat = new THREE.MeshPhongMaterial({ color: 0xd4b58c })
   const whiteStripeMat = new THREE.MeshPhongMaterial({ color: 0xf5f5f5 })
   const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.3 })
   const mastMat = new THREE.MeshPhongMaterial({ color: 0x3d2314 })
   const ironMat = new THREE.MeshStandardMaterial({ color: 0x1f1f1f, metalness: 0.7, roughness: 0.4 })
-  const railMat = new THREE.MeshPhongMaterial({ color: 0x18120c })
 
   const sailTexture = getSailTexture('sloop')
   const sailMat = new THREE.MeshPhongMaterial({ map: sailTexture, side: THREE.DoubleSide, transparent: true, opacity: 0.95 })
@@ -723,13 +722,25 @@ function createNavalSloopMesh(scale: number): THREE.Group {
 
   mesh.userData.sails = sails
 
-  // Royal Navy Flag at Masthead
+  // === ROYAL NAVY FLAG ATTACHED DIRECTLY TO MAIN TOPMAST POLE ===
+  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05 * scale, 0.07 * scale, 3.0 * scale, 6), mastMat)
+  flagPole.position.set(0, 17.5 * scale, -0.5 * scale)
+  mesh.add(flagPole)
+
+  const truckGold = new THREE.Mesh(new THREE.SphereGeometry(0.15 * scale, 8, 8), goldMat)
+  truckGold.position.set(0, 19.0 * scale, -0.5 * scale)
+  mesh.add(truckGold)
+
   const ensignTex = getRoyalNavalEnsignTexture()
   const flagMat = new THREE.MeshPhongMaterial({ map: ensignTex, side: THREE.DoubleSide })
+  const flagGroup = new THREE.Group()
   const flagMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.4 * scale, 1.4 * scale, 8, 4), flagMat)
-  flagMesh.position.set(1.2 * scale, 16.5 * scale, -0.5 * scale)
-  flagMesh.rotation.y = Math.PI / 2
-  mesh.add(flagMesh)
+  flagMesh.position.set(1.2 * scale, 0, 0)
+  flagGroup.add(flagMesh)
+
+  flagGroup.position.set(0, 18.0 * scale, -0.5 * scale)
+  flagGroup.rotation.y = Math.PI / 2
+  mesh.add(flagGroup)
   mesh.userData.flagMesh = flagMesh
 
   return mesh
@@ -741,7 +752,6 @@ function createNavalSloopMesh(scale: number): THREE.Group {
 function createNavalManOfWarMesh(scale: number): THREE.Group {
   const mesh = new THREE.Group()
 
-  // First-Rate Line of Battle Colors: Black & Yellow Nelson Checker Striping
   const blackHullMat = new THREE.MeshPhongMaterial({ color: 0x141414 })
   const yellowStripeMat = new THREE.MeshPhongMaterial({ color: 0xd4a017 })
   const deckMat = new THREE.MeshPhongMaterial({ color: 0xbf9b73 })
@@ -863,13 +873,25 @@ function createNavalManOfWarMesh(scale: number): THREE.Group {
 
   mesh.userData.sails = sails
 
-  // Royal Navy Flag at Main Topmast
+  // === ROYAL NAVY FLAG ATTACHED DIRECTLY TO MAIN TOPMAST POLE ===
+  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * scale, 0.08 * scale, 3.5 * scale, 6), mastMat)
+  flagPole.position.set(0, 22.0 * scale, -0.5 * scale)
+  mesh.add(flagPole)
+
+  const truckGold = new THREE.Mesh(new THREE.SphereGeometry(0.18 * scale, 8, 8), goldMat)
+  truckGold.position.set(0, 23.75 * scale, -0.5 * scale)
+  mesh.add(truckGold)
+
   const ensignTex = getRoyalNavalEnsignTexture()
   const flagMat = new THREE.MeshPhongMaterial({ map: ensignTex, side: THREE.DoubleSide })
+  const flagGroup = new THREE.Group()
   const flagMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.0 * scale, 1.8 * scale, 10, 5), flagMat)
-  flagMesh.position.set(1.5 * scale, 21.5 * scale, -0.5 * scale)
-  flagMesh.rotation.y = Math.PI / 2
-  mesh.add(flagMesh)
+  flagMesh.position.set(1.5 * scale, 0, 0)
+  flagGroup.add(flagMesh)
+
+  flagGroup.position.set(0, 22.8 * scale, -0.5 * scale)
+  flagGroup.rotation.y = Math.PI / 2
+  mesh.add(flagGroup)
   mesh.userData.flagMesh = flagMesh
 
   return mesh
@@ -885,6 +907,7 @@ function createCorsairRammerMesh(scale: number): THREE.Group {
   const deckMat = new THREE.MeshPhongMaterial({ color: 0x8a735c })
   const armorMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.85, roughness: 0.3 })
   const ironMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.2 })
+  const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.25 })
   const mastMat = new THREE.MeshPhongMaterial({ color: 0x2b1c12 })
 
   const sailTexture = getSailTexture('rammer')
@@ -914,14 +937,64 @@ function createCorsairRammerMesh(scale: number): THREE.Group {
     mesh.add(plate)
   }
 
-  // Lethal Spiked Iron Ramming Beak at Bow
-  const ramSpike = new THREE.Mesh(
-    new THREE.ConeGeometry(0.75 * scale, 6.0 * scale, 8),
-    ironMat
-  )
-  ramSpike.rotation.x = -Math.PI / 2
-  ramSpike.position.set(0, 1.6 * scale, 9.5 * scale)
-  mesh.add(ramSpike)
+  // === REDONE MULTI-PART FORGED NAVAL RAMMING ROSTRUM (SEAMLESSLY INTEGRATED INTO HULL) ===
+  const ramGroup = new THREE.Group()
+
+  // 1. Heavy Timber Prow Extension Beam (Starts deep inside hull at Z = 4.0*scale out to Z = 11.2*scale)
+  const prowBeam = new THREE.Mesh(new THREE.BoxGeometry(1.1 * scale, 1.1 * scale, 7.2 * scale), darkWoodMat)
+  prowBeam.position.set(0, 0, 3.6 * scale)
+  ramGroup.add(prowBeam)
+
+  // 2. Heavy Iron Bow Reinforcement Collar (wraps around hull exit point at Z = 7.8*scale)
+  const bowCollar = new THREE.Mesh(new THREE.BoxGeometry(1.5 * scale, 1.5 * scale, 0.8 * scale), armorMat)
+  bowCollar.position.set(0, 0, 3.8 * scale)
+  ramGroup.add(bowCollar)
+
+  // 3. Iron Reinforcement Side Brackets & Bolt Rivets (Running along full prow length)
+  for (let side = -1; side <= 1; side += 2) {
+    const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.22 * scale, 1.4 * scale, 6.8 * scale), armorMat)
+    bracket.position.set(side * 0.6 * scale, 0, 3.4 * scale)
+    ramGroup.add(bracket)
+
+    for (let r = 0.5; r <= 6.0; r += 1.0) {
+      const rivet = new THREE.Mesh(new THREE.SphereGeometry(0.12 * scale, 6, 6), ironMat)
+      rivet.position.set(side * 0.72 * scale, 0.45 * scale, r * scale)
+      ramGroup.add(rivet)
+    }
+  }
+
+  // 4. Central Forged Iron Ram Blade (Faceted Triangular Wedge)
+  const bladeShape = new THREE.Shape()
+  bladeShape.moveTo(0, 1.0 * scale)
+  bladeShape.lineTo(0.6 * scale, -0.7 * scale)
+  bladeShape.lineTo(-0.6 * scale, -0.7 * scale)
+  bladeShape.closePath()
+
+  const bladeGeom = new THREE.ExtrudeGeometry(bladeShape, { depth: 3.5 * scale, bevelEnabled: true, bevelThickness: 0.2, bevelSize: 0.1, bevelSegments: 2 })
+  const ramBlade = new THREE.Mesh(bladeGeom, ironMat)
+  ramBlade.position.set(0, 0, 6.8 * scale)
+  ramGroup.add(ramBlade)
+
+  // 5. Upper & Lower Sharp Barb Hook Spurs
+  const spurGeom = new THREE.ConeGeometry(0.4 * scale, 2.4 * scale, 6)
+  const spurTop = new THREE.Mesh(spurGeom, ironMat)
+  spurTop.rotation.x = Math.PI / 2 + 0.35
+  spurTop.position.set(0, 0.7 * scale, 7.8 * scale)
+  ramGroup.add(spurTop)
+
+  const spurBot = new THREE.Mesh(spurGeom, ironMat)
+  spurBot.rotation.x = Math.PI / 2 - 0.35
+  spurBot.position.set(0, -0.7 * scale, 7.8 * scale)
+  ramGroup.add(spurBot)
+
+  // 6. Bronze Boss Head Collar
+  const ramBoss = new THREE.Mesh(new THREE.SphereGeometry(0.7 * scale, 8, 8), goldMat)
+  ramBoss.position.set(0, 0, 6.6 * scale)
+  ramGroup.add(ramBoss)
+
+  // Anchor ramGroup deep inside the hull structure at Z = 4.0 * scale
+  ramGroup.position.set(0, 1.6 * scale, 4.0 * scale)
+  mesh.add(ramGroup)
 
   const deck = new THREE.Mesh(new THREE.BoxGeometry(5.0 * scale, 0.3 * scale, 12.0 * scale), deckMat)
   deck.position.set(0, 3.1 * scale, 0)
@@ -966,12 +1039,24 @@ function createCorsairRammerMesh(scale: number): THREE.Group {
 
   mesh.userData.sails = sails
 
-  // Corsair Flag
+  // === CORSAIR FLAG ATTACHED DIRECTLY TO MAIN TOPMAST POLE ===
+  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05 * scale, 0.07 * scale, 3.0 * scale, 6), mastMat)
+  flagPole.position.set(0, 16.5 * scale, 0)
+  mesh.add(flagPole)
+
+  const truckIron = new THREE.Mesh(new THREE.SphereGeometry(0.15 * scale, 8, 8), armorMat)
+  truckIron.position.set(0, 18.0 * scale, 0)
+  mesh.add(truckIron)
+
   const flagMat = new THREE.MeshBasicMaterial({ color: 0xb30000, side: THREE.DoubleSide })
+  const flagGroup = new THREE.Group()
   const flagMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.5 * scale, 1.4 * scale, 8, 4), flagMat)
-  flagMesh.position.set(1.25 * scale, 15.5 * scale, 0)
-  flagMesh.rotation.y = Math.PI / 2
-  mesh.add(flagMesh)
+  flagMesh.position.set(1.25 * scale, 0, 0)
+  flagGroup.add(flagMesh)
+
+  flagGroup.position.set(0, 17.0 * scale, 0)
+  flagGroup.rotation.y = Math.PI / 2
+  mesh.add(flagGroup)
   mesh.userData.flagMesh = flagMesh
 
   return mesh

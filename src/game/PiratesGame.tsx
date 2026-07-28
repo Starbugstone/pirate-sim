@@ -12,7 +12,7 @@ import {
 import { normalizeAngle, shortestAngleDelta } from './helpers'
 import { createOcean, updateOcean, setOceanIslands, getOceanHeight, createSprayPool, emitSpray, updateSpray } from './ocean'
 import { createPlayerShip as buildPlayerShip, createEnemyShipMesh, updateShipBuoyancy } from './ships'
-import { createSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
+import { createSky, updateSky, spawnIsland as buildIsland, spawnRock as buildRock, spawnSunkenShip as buildSunkenShip, createKraken as buildKraken } from './world'
 import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, clearShipWakes, createCannonMuzzleFlash, updateMuzzleFlashes, clearMuzzleFlashes } from './effects'
 import { createAmbientFish, updateAmbientFish } from './ambientFish'
 import { updateShorelineFoamTime } from './terrain'
@@ -89,6 +89,7 @@ export function PiratesGame() {
 
 
 let scene, camera, renderer
+let atmosphere
 let animationId = null
 // Constants from ocean.js / ship.js
 
@@ -545,20 +546,19 @@ function processDisposalQueue() {
 
 function init() {
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x64a6d6)
-  scene.fog = new THREE.Fog(0x18486b, 180, 750)
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000)
+  // The pale blue-grey fog matches the humid horizon in the sky dome. Terrain
+  // is completely concealed before it reaches the procedural load boundary.
+  scene.fog = new THREE.Fog(0x9fcfd7, 380, 900)
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1400)
   camera.position.set(0, 30, -40)
   camera.lookAt(0, 0, 0)
   renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: false, powerPreference: 'high-performance' })
   renderer.setSize(window.innerWidth, window.innerHeight)
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
-  scene.add(ambientLight)
-  const sunLight = new THREE.DirectionalLight(0xffffcc, 1)
-  sunLight.position.set(50, 100, 50)
-  scene.add(sunLight)
-  createSky(scene)
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 1.08
+  atmosphere = createSky(scene)
   createPlayerShipLocal()
   oceanMesh = createOcean(scene)
   sprayPool = createSprayPool(scene)
@@ -755,21 +755,23 @@ function checkProceduralSpawns() {
   const px = Math.floor(playerPos.value.x / CHUNK_SIZE)
   const pz = Math.floor(playerPos.value.z / CHUNK_SIZE)
 
-  // Expand chunks gradually â€” cap at 5x5 (radius 2) to avoid lag spikes
-  const chunkRadius = spawnedChunks.size < 10 ? 1 : 2
-
-  // Check chunk grid around player
+  // Keep an extra ring loaded beyond the fog. New chunks are ordered nearest
+  // first and capped per pass so the larger view distance does not cause a
+  // single expensive terrain-generation frame.
+  const chunkRadius = 3
+  const missingChunks = []
   for (let dx = -chunkRadius; dx <= chunkRadius; dx++) {
     for (let dz = -chunkRadius; dz <= chunkRadius; dz++) {
       const cx = px + dx
       const cz = pz + dz
       const key = `${cx},${cz}`
-
-      if (!spawnedChunks.has(key)) {
-        spawnChunk(cx, cz)
-        spawnedChunks.add(key)
-      }
+      if (!spawnedChunks.has(key)) missingChunks.push({ cx, cz, key, distSq: dx * dx + dz * dz })
     }
+  }
+  missingChunks.sort((a, b) => a.distSq - b.distSq)
+  for (const chunk of missingChunks.slice(0, 4)) {
+    spawnChunk(chunk.cx, chunk.cz)
+    spawnedChunks.add(chunk.key)
   }
 
   // Ensure kraken is always in loaded chunk
@@ -851,7 +853,7 @@ function spawnChunk(cx, cz) {
   const isStartingChunk = (cx === 0 && cz === 0)
 
   // 20% chance of island per chunk — rarer, only 1
-  if (Math.random() < 0.2) {
+  if (Math.random() < 0.2 && worldObjects.islands.length < MAX_ISLANDS) {
     const angle = Math.random() * Math.PI * 2
     const maxDist = (CHUNK_SIZE / 2) - 50
     const dist = 25 + Math.random() * maxDist
@@ -1076,8 +1078,8 @@ function cleanupDistantChunks() {
   const px = playerPos.value.x
   const pz = playerPos.value.z
 
-  // Aggressive cleanup: only keep objects within 3 chunks
-  const maxDist = CHUNK_SIZE * 3
+  // Retain objects until they are fully hidden by the horizon mist.
+  const maxDist = CHUNK_SIZE * 5
 
   // Clean islands - queue mesh for gradual disposal (avoid sync spikes)
   for (let i = worldObjects.islands.length - 1; i >= 0; i--) {
@@ -1128,14 +1130,14 @@ function cleanupDistantChunks() {
     }
   }
 
-  // Clean chunk references beyond 4 chunks
+  // Keep chunk references slightly beyond the object cleanup distance.
   for (const key of [...spawnedChunks]) {
     const [cx, cz] = key.split(',').map(Number)
     const wx = cx * CHUNK_SIZE + CHUNK_SIZE / 2
     const wz = cz * CHUNK_SIZE + CHUNK_SIZE / 2
     const dx = wx - px
     const dz = wz - pz
-    if (Math.sqrt(dx*dx + dz*dz) > CHUNK_SIZE * 4) {
+    if (Math.sqrt(dx*dx + dz*dz) > CHUNK_SIZE * 6) {
       spawnedChunks.delete(key)
     }
   }
@@ -2613,6 +2615,7 @@ function update(dt) {
   camera.position.z = playerPos.value.z - Math.cos(playerAngle) * dist
   camera.position.y = height
   camera.lookAt(playerPos.value.x, 5, playerPos.value.z) // Look slightly above water
+  if (atmosphere) updateSky(atmosphere, camera.position.x, camera.position.z)
 
   // Island collision
   for (const island of islands) {

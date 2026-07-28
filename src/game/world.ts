@@ -2,13 +2,85 @@
 import * as THREE from 'three'
 import { generateIslandMesh, IslandArchetype, getTerrainNormalMap, fbm } from './terrain'
 
-export function createSky(scene: THREE.Scene) {
-  const sunGeometry = new THREE.CircleGeometry(12, 32)
-  const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xfffaed })
-  const sun = new THREE.Mesh(sunGeometry, sunMaterial)
-  sun.position.set(120, 90, -120)
-  sun.lookAt(0, 0, 0)
-  scene.add(sun)
+export function createSky(scene: THREE.Scene): THREE.Group {
+  // A procedural sky dome avoids a texture seam and can follow the player
+  // forever in the procedural world. The sun is drawn into the sky itself so
+  // it can never drift behind the dome or disappear beyond the camera far plane.
+  const atmosphere = new THREE.Group()
+  atmosphere.name = 'Caribbean atmosphere'
+
+  const skyGeometry = new THREE.SphereGeometry(1150, 40, 24)
+  const skyMaterial = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: false,
+    fog: false,
+    uniforms: {
+      // Keep the visible disc close to the sea horizon, which is the portion of
+      // sky shown by the game's deliberately downward-angled chase camera.
+      sunDirection: { value: new THREE.Vector3(0.55, 0.035, 0.83).normalize() }
+    },
+    vertexShader: `
+      varying vec3 vSkyDirection;
+
+      void main() {
+        vSkyDirection = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 sunDirection;
+      varying vec3 vSkyDirection;
+
+      void main() {
+        vec3 dir = normalize(vSkyDirection);
+        float height = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+        float horizonBand = exp(-abs(dir.y) * 7.0);
+
+        vec3 horizon = vec3(0.64, 0.84, 0.91);
+        vec3 tropicalBlue = vec3(0.10, 0.48, 0.78);
+        vec3 zenith = vec3(0.025, 0.22, 0.55);
+        vec3 sky = mix(horizon, tropicalBlue, smoothstep(0.48, 0.72, height));
+        sky = mix(sky, zenith, smoothstep(0.70, 1.0, height));
+
+        // Warm humid air at the horizon, with a soft solar halo and crisp core.
+        sky = mix(sky, vec3(0.82, 0.89, 0.84), horizonBand * 0.24);
+        float sunAmount = max(dot(dir, sunDirection), 0.0);
+        float halo = pow(sunAmount, 48.0);
+        float sunDisc = smoothstep(0.99935, 0.99972, sunAmount);
+        sky += vec3(1.0, 0.67, 0.30) * halo * 0.34;
+        sky = mix(sky, vec3(1.0, 0.93, 0.68), sunDisc);
+
+        // Very subtle screen-space dither prevents visible bands in the gradient.
+        float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        sky += (dither - 0.5) / 255.0;
+        gl_FragColor = vec4(sky, 1.0);
+      }
+    `
+  })
+
+  const sky = new THREE.Mesh(skyGeometry, skyMaterial)
+  sky.name = 'Procedural Caribbean skybox'
+  sky.renderOrder = -1000
+  sky.frustumCulled = false
+  atmosphere.add(sky)
+
+  const hemisphereLight = new THREE.HemisphereLight(0x9bd5ff, 0x31534b, 1.15)
+  atmosphere.add(hemisphereLight)
+
+  const sunLight = new THREE.DirectionalLight(0xfff0c2, 2.2)
+  sunLight.position.set(340, 500, 420)
+  sunLight.target.position.set(0, 0, 0)
+  atmosphere.add(sunLight, sunLight.target)
+
+  scene.add(atmosphere)
+  return atmosphere
+}
+
+export function updateSky(atmosphere: THREE.Group, x: number, z: number) {
+  // Moving only in X/Z preserves the lighting direction while keeping the dome
+  // centred on the camera throughout the infinite procedural world.
+  atmosphere.position.set(x, 0, z)
 }
 
 // ── 1. Detailed Multi-Frond Palm Tree Generator ──

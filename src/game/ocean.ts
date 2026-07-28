@@ -189,7 +189,9 @@ export function createOcean(scene: THREE.Scene): THREE.Mesh {
   scene.add(deepPlane)
 
   // Semi-transparent main ocean surface mesh (optimized geometry grid for 60 FPS)
-  const geometry = new THREE.PlaneGeometry(1000, 1000, 160, 160)
+  // Extend beyond the fog's fully opaque distance so the square mesh edge can
+  // never become visible at the horizon. Shader detail keeps this inexpensive.
+  const geometry = new THREE.PlaneGeometry(2200, 2200, 160, 160)
 
   const material = new THREE.ShaderMaterial({
     vertexShader,

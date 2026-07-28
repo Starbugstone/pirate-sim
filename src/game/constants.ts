@@ -12,7 +12,7 @@ export const MAX_TREASURES = 10
 export const MAX_CANNONBALLS = 40
 export const MAX_ACTIVE_ENEMIES = 6
 export const MAX_WAKE_PARTICLES = 35
-export const MAX_ISLANDS = 15
+export const MAX_ISLANDS = 18
 export const MAX_ROCKS = 12
 export const MAX_DISPOSE_PER_FRAME = 3
 // Canvas wind streaks are intentionally modest: each one needs two camera

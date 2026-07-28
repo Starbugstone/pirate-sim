@@ -185,12 +185,59 @@ let cameraMode = 0 // Start in behind view
 
 // Wind
 let windAngle = 0
-let targetWindAngle = 0 // For smooth wind transitions
 const windSpeed = ref(3)
-let targetWindSpeed = 3 // For smooth wind speed transitions
-let windChangeTimer = 0
+let windTransitionStartAngle = windAngle
+let windTransitionStartSpeed = windSpeed.value
+let targetWindAngle = windAngle
+let targetWindSpeed = windSpeed.value
+let windTransitionElapsed = 0
+let windTransitionDuration = 0
 let windVisualAngle = 0
 let windVisualSpeed = 3
+
+const MIN_WIND_SPEED = 2.5
+const MAX_WIND_SPEED = 6
+const MIN_WIND_TRANSITION_TIME = 26
+const MAX_WIND_TRANSITION_TIME = 40
+
+function beginWindTransition(announce = true) {
+  windTransitionStartAngle = windAngle
+  windTransitionStartSpeed = windSpeed.value
+
+  // Broad, slow course changes keep the wind meaningful without forcing an
+  // instant reaction from the player.
+  const shiftAmount = (0.35 + Math.random() * 0.9) * (Math.random() > 0.5 ? 1 : -1)
+  targetWindAngle = normalizeAngle(windAngle + shiftAmount)
+
+  targetWindSpeed = MIN_WIND_SPEED + Math.random() * (MAX_WIND_SPEED - MIN_WIND_SPEED)
+  if (Math.abs(targetWindSpeed - windSpeed.value) < 0.6) {
+    targetWindSpeed = windSpeed.value < (MIN_WIND_SPEED + MAX_WIND_SPEED) / 2
+      ? Math.min(MAX_WIND_SPEED, windSpeed.value + 0.6)
+      : Math.max(MIN_WIND_SPEED, windSpeed.value - 0.6)
+  }
+
+  windTransitionElapsed = 0
+  windTransitionDuration = MIN_WIND_TRANSITION_TIME +
+    Math.random() * (MAX_WIND_TRANSITION_TIME - MIN_WIND_TRANSITION_TIME)
+
+  if (announce) showMessage('Wind shifting...', 2000)
+}
+
+function updateWind(dt) {
+  if (windTransitionDuration <= 0) beginWindTransition(false)
+
+  windTransitionElapsed = Math.min(windTransitionDuration, windTransitionElapsed + dt)
+  const progress = windTransitionElapsed / windTransitionDuration
+  const angleChange = shortestAngleDelta(windTransitionStartAngle, targetWindAngle)
+
+  // Both values move at a constant rate for the full transition. All wind
+  // consumers use these live values, so sails and boat physics remain aligned.
+  windAngle = normalizeAngle(windTransitionStartAngle + angleChange * progress)
+  windSpeed.value = windTransitionStartSpeed +
+    (targetWindSpeed - windTransitionStartSpeed) * progress
+
+  if (windTransitionElapsed >= windTransitionDuration) beginWindTransition()
+}
 
 // Projectiles
 let cannonballs = []
@@ -383,11 +430,10 @@ function createWindParticles() {
 function updateWindParticles(dt) {
   if (!windParticleContext) return
 
-  const visualSmoothing = Math.min(1, dt * 2.8)
-  windVisualAngle = normalizeAngle(
-    windVisualAngle + shortestAngleDelta(windVisualAngle, windAngle) * visualSmoothing
-  )
-  windVisualSpeed += (windSpeed.value - windVisualSpeed) * visualSmoothing
+  // Render from the same wind state used by sailing physics. The particles'
+  // velocity then turns with that state instead of chasing a separate target.
+  windVisualAngle = windAngle
+  windVisualSpeed = windSpeed.value
 
   const ctx = windParticleContext
   const width = window.innerWidth
@@ -407,13 +453,14 @@ function updateWindParticles(dt) {
       continue
     }
 
-    particle.speed += (speed - particle.speed) * 0.12
+    const velocityAdjustment = Math.min(1, dt * 6)
+    particle.speed += (speed - particle.speed) * velocityAdjustment
     const swirlPhase = time * particle.swirlSpeed + particle.phase
     const swirlOffset = Math.sin(swirlPhase) * particle.swirl
     const verticalSwirl = Math.cos(swirlPhase * 0.9) * particle.swirl * 0.12
-    particle.vx += (windFlowVector.x * particle.speed + windCrossVector.x * swirlOffset - particle.vx) * 0.18
-    particle.vz += (windFlowVector.z * particle.speed + windCrossVector.z * swirlOffset - particle.vz) * 0.18
-    particle.vy += (verticalSwirl - particle.vy) * 0.08
+    particle.vx += (windFlowVector.x * particle.speed + windCrossVector.x * swirlOffset - particle.vx) * velocityAdjustment
+    particle.vz += (windFlowVector.z * particle.speed + windCrossVector.z * swirlOffset - particle.vz) * velocityAdjustment
+    particle.vy += (verticalSwirl - particle.vy) * Math.min(1, dt * 2.5)
 
     particle.x += particle.vx * dt
     particle.z += particle.vz * dt
@@ -2329,28 +2376,8 @@ function update(dt) {
 
   if (gameState.value !== 'playing') return
 
-  // Update wind - more dynamic changes
-  windChangeTimer -= dt
-  if (windChangeTimer <= 0) {
-    // Set new target wind values
-    // Wind changes should feel broad and nautical, not twitchy.
-    const shiftAmount = (0.35 + Math.random() * 0.9) * (Math.random() > 0.5 ? 1 : -1)
-    targetWindAngle = normalizeAngle(targetWindAngle + shiftAmount)
-    targetWindSpeed = 2.5 + Math.random() * 3.5
-    windChangeTimer = 14 + Math.random() * 6
-    showMessage('Wind shifting...', 2000)
-  }
-
-  // Wind direction and force should ease over time instead of snapping.
-  const windTransitionSpeed = 0.14
-  const windAngleDelta = shortestAngleDelta(windAngle, targetWindAngle)
-  if (Math.abs(windAngleDelta) > 0.001) {
-    windAngle = normalizeAngle(windAngle + windAngleDelta * windTransitionSpeed * dt * 60)
-  }
-
-  if (Math.abs(targetWindSpeed - windSpeed.value) > 0.02) {
-    windSpeed.value += (targetWindSpeed - windSpeed.value) * (windTransitionSpeed * 0.65) * dt * 60
-  }
+  // Direction and intensity progress linearly over long, continuous passages.
+  updateWind(dt)
 
   // Animate sails
   sailUpdateAccumulator += dt
@@ -3226,6 +3253,7 @@ function startGame() {
   playerAngle = 0
   targetRotation = 0
   playerSpeed.value = 0
+  beginWindTransition(false)
   Object.assign(playerPhysicsState, {
     currentY: 0,
     currentPitch: 0,

@@ -238,6 +238,301 @@ export function createCannon(): THREE.Group {
   return cannonGroup
 }
 
+// ── 3b. Visually Rich Pirate Port Generator ──
+export function createPiratePort(
+  spot: { x: number; z: number; angle: number },
+  radius: number,
+  heightmapFn: (x: number, z: number) => number
+) {
+  const portGroup = new THREE.Group()
+
+  // Deck elevation: elevated to y = 4.8 to prevent wave clipping under max Gerstner wave crests (+4.35)
+  const deckY = 4.8
+  const dockLength = 22 + radius * 0.15
+  const dockWidth = 6.0
+
+  // Materials
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.85 })
+  const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x3d2616, roughness: 0.9 })
+  const plankMat = new THREE.MeshStandardMaterial({ color: 0x6e4e37, roughness: 0.8 })
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.4 })
+  const thatchRoofMat = new THREE.MeshStandardMaterial({ color: 0x8b7d6b, roughness: 0.95 })
+  const fabricMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.7, side: THREE.DoubleSide })
+  const lanternMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 })
+  const ropeMat = new THREE.MeshStandardMaterial({ color: 0x997a54, roughness: 0.9 })
+
+  // Outer quay end center position relative to spot
+  const endX = spot.x + Math.cos(spot.angle) * dockLength
+  const endZ = spot.z + Math.sin(spot.angle) * dockLength
+
+  // Main Walkway Deck (Slab)
+  const walkwayGeom = new THREE.BoxGeometry(dockLength, 0.5, dockWidth)
+  const walkwayMesh = new THREE.Mesh(walkwayGeom, woodMat)
+  walkwayMesh.castShadow = true
+  walkwayMesh.receiveShadow = true
+
+  const midX = spot.x + Math.cos(spot.angle) * (dockLength / 2)
+  const midZ = spot.z + Math.sin(spot.angle) * (dockLength / 2)
+  walkwayMesh.position.set(midX, deckY, midZ)
+  walkwayMesh.rotation.y = -spot.angle
+  portGroup.add(walkwayMesh)
+
+  // Individual Plank Deck Details on top of walkway
+  const numPlanks = Math.floor(dockLength / 1.2)
+  for (let p = 0; p < numPlanks; p++) {
+    const pOffset = -dockLength / 2 + (p + 0.5) * 1.2
+    const plankGeom = new THREE.BoxGeometry(1.1, 0.1, dockWidth - 0.2)
+    const plankMesh = new THREE.Mesh(plankGeom, p % 2 === 0 ? plankMat : darkWoodMat)
+    plankMesh.position.set(pOffset, 0.3, (Math.random() - 0.5) * 0.05)
+    walkwayMesh.add(plankMesh)
+  }
+
+  // T-Head Quay Platform at the end of the walkway
+  const tHeadWidth = 14.0
+  const tHeadDepth = 7.0
+  const tHeadGeom = new THREE.BoxGeometry(tHeadDepth, 0.5, tHeadWidth)
+  const tHeadMesh = new THREE.Mesh(tHeadGeom, woodMat)
+  tHeadMesh.castShadow = true
+  tHeadMesh.receiveShadow = true
+  tHeadMesh.position.set(endX, deckY, endZ)
+  tHeadMesh.rotation.y = -spot.angle
+  portGroup.add(tHeadMesh)
+
+  // T-Head Plank Details
+  const numTPlanks = Math.floor(tHeadWidth / 1.2)
+  for (let tp = 0; tp < numTPlanks; tp++) {
+    const tpOffset = -tHeadWidth / 2 + (tp + 0.5) * 1.2
+    const tPlankMesh = new THREE.Mesh(new THREE.BoxGeometry(tHeadDepth - 0.2, 0.1, 1.1), tp % 2 === 0 ? plankMat : darkWoodMat)
+    tPlankMesh.position.set(0, 0.3, tpOffset)
+    tHeadMesh.add(tPlankMesh)
+  }
+
+  // Support Stilts / Pilings extending deep into water bed (y = -15 to deckY)
+  const numPiles = Math.floor(dockLength / 4) + 1
+  for (let i = 0; i < numPiles; i++) {
+    const pDist = (i / (numPiles - 1)) * dockLength
+    const px = spot.x + Math.cos(spot.angle) * pDist
+    const pz = spot.z + Math.sin(spot.angle) * pDist
+    const perpAngle = spot.angle + Math.PI / 2
+    const halfW = dockWidth / 2 - 0.4
+
+    for (const side of [-1, 1]) {
+      const pileX = px + Math.cos(perpAngle) * (side * halfW)
+      const pileZ = pz + Math.sin(perpAngle) * (side * halfW)
+      const pileHeight = deckY + 16.0
+      const pileGeom = new THREE.CylinderGeometry(0.35, 0.45, pileHeight, 8)
+      const pile = new THREE.Mesh(pileGeom, darkWoodMat)
+      pile.position.set(pileX, deckY - pileHeight / 2 + 0.2, pileZ)
+      portGroup.add(pile)
+
+      // Iron band near water surface
+      const bandGeom = new THREE.CylinderGeometry(0.4, 0.4, 0.2, 8)
+      const band = new THREE.Mesh(bandGeom, metalMat)
+      band.position.set(pileX, 1.0, pileZ)
+      portGroup.add(band)
+    }
+  }
+
+  // Additional Support Stilts under T-Head Quay
+  for (const side of [-1, 1]) {
+    for (const depthOffset of [-2, 2]) {
+      const perpAngle = spot.angle + Math.PI / 2
+      const pileX = endX + Math.cos(perpAngle) * (side * (tHeadWidth / 2 - 0.8)) + Math.cos(spot.angle) * depthOffset
+      const pileZ = endZ + Math.sin(perpAngle) * (side * (tHeadWidth / 2 - 0.8)) + Math.sin(spot.angle) * depthOffset
+      const pileHeight = deckY + 16.0
+      const pile = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, pileHeight, 8), darkWoodMat)
+      pile.position.set(pileX, deckY - pileHeight / 2 + 0.2, pileZ)
+      portGroup.add(pile)
+    }
+  }
+
+  // ── Port Master Trading Shack & Storehouse (At Shore End) ──
+  const shackGroup = new THREE.Group()
+  const shackW = 6.0
+  const shackD = 5.0
+  const shackH = 4.2
+
+  // Shack Walls
+  const shackWalls = new THREE.Mesh(new THREE.BoxGeometry(shackW, shackH, shackD), woodMat)
+  shackWalls.position.y = shackH / 2
+  shackWalls.castShadow = true
+  shackWalls.receiveShadow = true
+  shackGroup.add(shackWalls)
+
+  // Shack Roof (Thatched Pyramid)
+  const shackRoof = new THREE.Mesh(new THREE.ConeGeometry(shackW * 0.9, 2.8, 4), thatchRoofMat)
+  shackRoof.position.y = shackH + 1.4
+  shackRoof.rotation.y = Math.PI / 4
+  shackGroup.add(shackRoof)
+
+  // Merchant Counter Window cutout
+  const counterGeom = new THREE.BoxGeometry(3.5, 0.8, 0.6)
+  const counter = new THREE.Mesh(counterGeom, darkWoodMat)
+  counter.position.set(0, 1.5, shackD / 2 + 0.2)
+  shackGroup.add(counter)
+
+  // Wooden Signboard "PORT SHOP" over counter
+  const signGroup = new THREE.Group()
+  const signBoard = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.0, 0.2), darkWoodMat)
+  signBoard.position.set(0, 3.2, shackD / 2 + 0.3)
+  signGroup.add(signBoard)
+  // Decorative sign emblem
+  const signEmblem = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.25, 8), lanternMat)
+  signEmblem.rotation.x = Math.PI / 2
+  signEmblem.position.set(0, 3.2, shackD / 2 + 0.45)
+  signGroup.add(signEmblem)
+  shackGroup.add(signGroup)
+
+  // Hanging Lantern on Shack Post
+  const shackLantern = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8), lanternMat)
+  shackLantern.position.set(-shackW / 2 - 0.2, 3.0, shackD / 2 + 0.4)
+  shackGroup.add(shackLantern)
+
+  // Place Shack on Shore / Deck Root
+  const shackShoreY = heightmapFn(spot.x, spot.z)
+  shackGroup.position.set(spot.x, Math.max(shackShoreY, deckY), spot.z)
+  shackGroup.rotation.y = -spot.angle + Math.PI / 2
+  portGroup.add(shackGroup)
+
+  // ── Port Props & Cargo Goods on Deck ──
+  // 1. Stacked Cargo Crates
+  const crateMat = new THREE.MeshStandardMaterial({ color: 0x8b6d51, roughness: 0.8 })
+  for (let c = 0; c < 4; c++) {
+    const crateSize = 1.0 + (c % 2) * 0.3
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(crateSize, crateSize, crateSize), crateMat)
+    const cSide = (c % 2 === 0 ? 1 : -1) * (dockWidth / 2 - 1.2)
+    const cOffset = 4.0 + c * 2.5
+    const cx = spot.x + Math.cos(spot.angle) * cOffset + Math.cos(spot.angle + Math.PI / 2) * cSide
+    const cz = spot.z + Math.sin(spot.angle) * cOffset + Math.sin(spot.angle + Math.PI / 2) * cSide
+    crate.position.set(cx, deckY + crateSize / 2 + 0.25, cz)
+    crate.rotation.y = Math.random() * Math.PI
+    portGroup.add(crate)
+  }
+
+  // 2. Rum Barrels
+  const barrelMat = new THREE.MeshStandardMaterial({ color: 0x3d2514, roughness: 0.85 })
+  for (let b = 0; b < 3; b++) {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.2, 10), barrelMat)
+    const bOffset = dockLength * 0.7 + b * 1.2
+    const bx = spot.x + Math.cos(spot.angle) * bOffset + Math.cos(spot.angle + Math.PI / 2) * 2.0
+    const bz = spot.z + Math.sin(spot.angle) * bOffset + Math.sin(spot.angle + Math.PI / 2) * 2.0
+    barrel.position.set(bx, deckY + 0.6 + 0.25, bz)
+    portGroup.add(barrel)
+  }
+
+  // 3. Iron Anchor Prop on Deck
+  const anchorGroup = new THREE.Group()
+  const anchorStock = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.2, 8), metalMat)
+  anchorStock.rotation.z = Math.PI / 2
+  anchorGroup.add(anchorStock)
+  const anchorFluke = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.1, 8, 12, Math.PI), metalMat)
+  anchorFluke.position.y = -0.9
+  anchorGroup.add(anchorFluke)
+  anchorGroup.position.set(endX - Math.cos(spot.angle) * 2.0, deckY + 0.5, endZ - Math.sin(spot.angle) * 2.0)
+  anchorGroup.rotation.y = -spot.angle
+  portGroup.add(anchorGroup)
+
+  // 4. Wooden Cargo Crane Hoist
+  const craneGroup = new THREE.Group()
+  const craneMast = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.35, 6.0, 8), darkWoodMat)
+  craneMast.position.y = 3.0
+  craneGroup.add(craneMast)
+
+  const craneBoom = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 5.0, 8), darkWoodMat)
+  craneBoom.rotation.z = Math.PI / 4
+  craneBoom.position.set(1.6, 4.8, 0)
+  craneGroup.add(craneBoom)
+
+  // Hanging Rope & Suspended Barrel
+  const craneRope = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 3.5, 6), ropeMat)
+  craneRope.position.set(3.2, 2.8, 0)
+  craneGroup.add(craneRope)
+
+  const cargoBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.2, 10), barrelMat)
+  cargoBarrel.position.set(3.2, 0.8, 0)
+  craneGroup.add(cargoBarrel)
+
+  craneGroup.position.set(endX + Math.cos(spot.angle + Math.PI / 2) * 4.0, deckY + 0.25, endZ + Math.sin(spot.angle + Math.PI / 2) * 4.0)
+  craneGroup.rotation.y = -spot.angle
+  portGroup.add(craneGroup)
+
+  // 5. Pirate Flag Mast
+  const flagMastGroup = new THREE.Group()
+  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 9.0, 8), darkWoodMat)
+  flagPole.position.y = 4.5
+  flagMastGroup.add(flagPole)
+
+  const pirateFlag = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.4), fabricMat)
+  pirateFlag.position.set(1.2, 7.8, 0)
+  flagMastGroup.add(pirateFlag)
+
+  const topGold = new THREE.Mesh(new THREE.SphereGeometry(0.25, 8, 8), lanternMat)
+  topGold.position.y = 9.0
+  flagMastGroup.add(topGold)
+
+  flagMastGroup.position.set(endX - Math.cos(spot.angle + Math.PI / 2) * 4.0, deckY + 0.25, endZ - Math.sin(spot.angle + Math.PI / 2) * 4.0)
+  flagMastGroup.rotation.y = -spot.angle
+  portGroup.add(flagMastGroup)
+
+  // 6. Wooden Mooring Bollards along Pier
+  for (const bSide of [-1, 1]) {
+    const bollardX = endX + Math.cos(spot.angle + Math.PI / 2) * (bSide * (tHeadWidth / 2 - 0.6))
+    const bollardZ = endZ + Math.sin(spot.angle + Math.PI / 2) * (bSide * (tHeadWidth / 2 - 0.6))
+    const bollard = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.28, 1.2, 8), darkWoodMat)
+    bollard.position.set(bollardX, deckY + 0.85, bollardZ)
+    portGroup.add(bollard)
+  }
+
+  // ── 7. Floating Harbor Mooring Buoys & Docking Ring ──
+  const dockEndRingGeom = new THREE.RingGeometry(14, 16.5, 48)
+  const dockEndRingMat = new THREE.MeshBasicMaterial({
+    color: 0x00e5ff,
+    transparent: true,
+    opacity: 0.65,
+    side: THREE.DoubleSide
+  })
+  const dockEndRing = new THREE.Mesh(dockEndRingGeom, dockEndRingMat)
+  dockEndRing.rotation.x = -Math.PI / 2
+  dockEndRing.position.set(endX, 0.2, endZ)
+  portGroup.add(dockEndRing)
+
+  // Floating Mooring Buoys around berth perimeter
+  const buoys: THREE.Group[] = []
+  const buoyMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness: 0.6 })
+  const buoyLanternMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 })
+
+  for (let b = 0; b < 4; b++) {
+    const bAngle = (b / 4) * Math.PI * 2
+    const buoyDist = 15.0
+    const buoyX = endX + Math.cos(bAngle) * buoyDist
+    const buoyZ = endZ + Math.sin(bAngle) * buoyDist
+
+    const buoyGroup = new THREE.Group()
+    const buoyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 10), buoyMat)
+    buoyMesh.scale.set(1.0, 0.8, 1.0)
+    buoyGroup.add(buoyMesh)
+
+    const buoyTopLight = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 8), buoyLanternMat)
+    buoyTopLight.position.y = 0.9
+    buoyGroup.add(buoyTopLight)
+
+    buoyGroup.position.set(buoyX, 0.2, buoyZ)
+    buoyGroup.userData.localX = buoyX
+    buoyGroup.userData.localZ = buoyZ
+    portGroup.add(buoyGroup)
+    buoys.push(buoyGroup)
+  }
+
+  dockEndRing.userData.buoys = buoys
+
+  return {
+    portGroup,
+    dockEndX: endX,
+    dockEndZ: endZ,
+    dockEndRing
+  }
+}
+
 // ── 4. Main Island Spawn Function ──
 export function spawnIsland(scene: THREE.Scene, x: number, z: number, forcedArchetype?: IslandArchetype) {
   const islandGroup = new THREE.Group()
@@ -300,35 +595,21 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number, forcedArch
   if (islandData.dockSpot || archetype === IslandArchetype.PirateBay) {
     hasDock = true
     const spot = islandData.dockSpot || { x: radius * 0.6, z: 0, angle: 0 }
-    const dockLength = 16 + radius * 0.2
-    const dockGeom = new THREE.BoxGeometry(dockLength, 0.4, 4.5)
-    const dockMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 })
-    const dock = new THREE.Mesh(dockGeom, dockMat)
+    
+    const portData = createPiratePort(spot, radius, islandData.heightmapFn)
+    islandGroup.add(portData.portGroup)
 
-    const dockX = spot.x + Math.cos(spot.angle) * (dockLength / 2)
-    const dockZ = spot.z + Math.sin(spot.angle) * (dockLength / 2)
-    dock.position.set(dockX, 0.2, dockZ)
-    dock.rotation.y = -spot.angle
-    islandGroup.add(dock)
+    dockEndX = portData.dockEndX
+    dockEndZ = portData.dockEndZ
+    dockEndRing = portData.dockEndRing
 
-    dockEndX = spot.x + Math.cos(spot.angle) * dockLength
-    const dockEndZ = spot.z + Math.sin(spot.angle) * dockLength
-
-    // Dock End Ring
-    const dockEndRingGeom = new THREE.RingGeometry(6, 8, 32)
-    const dockEndRingMat = new THREE.MeshBasicMaterial({
-      color: 0xff3300, transparent: true, opacity: 0.6, side: THREE.DoubleSide
-    })
-    dockEndRing = new THREE.Mesh(dockEndRingGeom, dockEndRingMat)
-    dockEndRing.rotation.x = -Math.PI / 2
-    dockEndRing.position.set(dockEndX, 0.25, dockEndZ)
-    islandGroup.add(dockEndRing)
-
-    // Add 2 Coastal Cannons near the dock
+    // Add 2 Coastal Cannons near the port entrance
     for (let c = 0; c < 2; c++) {
       const cannon = createCannon()
-      const cOffset = (c === 0 ? 5 : -5)
-      cannon.position.set(spot.x + cOffset, islandData.heightmapFn(spot.x + cOffset, spot.z), spot.z)
+      const cOffset = (c === 0 ? 7 : -7)
+      const cx = spot.x + Math.cos(spot.angle + Math.PI / 2) * cOffset
+      const cz = spot.z + Math.sin(spot.angle + Math.PI / 2) * cOffset
+      cannon.position.set(cx, islandData.heightmapFn(cx, cz), cz)
       cannon.rotation.y = -spot.angle + Math.PI / 2
       islandGroup.add(cannon)
     }
@@ -387,7 +668,7 @@ export function spawnIsland(scene: THREE.Scene, x: number, z: number, forcedArch
   islandGroup.userData.dockEndX = dockEndX
   islandGroup.userData.dockEndZ = dockEndZ
   islandGroup.userData.dockWorldX = x + dockEndX
-  islandGroup.userData.dockWorldZ = z + (dockEndRing ? dockEndRing.position.z : 0)
+  islandGroup.userData.dockWorldZ = z + dockEndZ
   islandGroup.userData.hasHarbor = hasDock
   islandGroup.userData.dockEndRing = dockEndRing
 

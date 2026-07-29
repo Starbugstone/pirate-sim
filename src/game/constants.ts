@@ -21,7 +21,7 @@ export const MAX_WIND_PARTICLES = 120
 
 export const CHUNK_SIZE = 200
 
-export const HARBOUR_RANGE = 15
+export const HARBOUR_RANGE = 30
 
 export const ICON_RENDER_DIST = 200
 export const INACTIVE_DIST = 300

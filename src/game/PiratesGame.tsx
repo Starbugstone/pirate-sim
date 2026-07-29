@@ -1659,7 +1659,12 @@ function onKeyDown(e) {
   }
 
   if (gameState.value !== 'playing') return
-  if (shopOpen.value) return
+  // A is also the shop exit: close the overlay and start weighing anchor in
+  // one action. Other gameplay input remains blocked while shopping.
+  if (shopOpen.value) {
+    if (key === 'a' || code === 'keya') closeShop()
+    return
+  }
   if (anchorAnimating) return
 
   if (key === 'b' || code === 'keyb') {
@@ -1745,7 +1750,7 @@ function checkHarbourEntry() {
       : (island.x + (island.mesh.userData.dockEndX || 0))
     const dockWorldZ = island.userData && island.userData.dockWorldZ !== undefined
       ? island.userData.dockWorldZ
-      : island.z
+      : (island.z + (island.mesh.userData.dockEndZ || 0))
     const dx = playerPos.value.x - dockWorldX
     const dz = playerPos.value.z - dockWorldZ
     const dist = Math.sqrt(dx * dx + dz * dz)
@@ -1932,7 +1937,15 @@ function closeShop() {
   shopOpen.value = false
   harbourShopDismissed = true
   shopMessage.value = ''
-  showMessage('Back to the helm', 1500)
+
+  if (anchorDropped && !anchorAnimating) {
+    anchorAnimating = true
+    anchorAnimDir = -1
+    anchorAnimProgress = 1
+    showMessage('Leaving port — raising anchor...', 1500)
+  } else {
+    showMessage('Back to the helm', 1500)
+  }
   requestPointerLock()
 }
 
@@ -2459,11 +2472,26 @@ function update(dt) {
 
   const allIslands = [...islands, ...worldObjects.islands]
   allIslands.forEach(island => {
-    if (island.mesh && island.mesh.userData.hasHarbor && island.mesh.userData.dock) {
-      const gX = island.x + island.mesh.userData.dockEndX
-      const gZ = island.z
+    if (island.mesh && island.mesh.userData.hasHarbor && island.mesh.userData.dockEndRing) {
+      const ring = island.mesh.userData.dockEndRing
+      const gX = island.userData && island.userData.dockWorldX !== undefined
+        ? island.userData.dockWorldX
+        : (island.x + (island.mesh.userData.dockEndX || 0))
+      const gZ = island.userData && island.userData.dockWorldZ !== undefined
+        ? island.userData.dockWorldZ
+        : (island.z + (island.mesh.userData.dockEndZ || 0))
       const h = getOceanHeight(gX, gZ, oceanTime, windAngle, windSpeed.value)
-      island.mesh.userData.dockEndRing.position.y = h + 0.2
+      ring.position.y = h + 0.25
+      ring.rotation.z += dt * 0.2
+
+      if (ring.userData && ring.userData.buoys) {
+        ring.userData.buoys.forEach((buoy: any) => {
+          const buoyWorldX = island.x + buoy.userData.localX
+          const buoyWorldZ = island.z + buoy.userData.localZ
+          const buoyH = getOceanHeight(buoyWorldX, buoyWorldZ, oceanTime, windAngle, windSpeed.value)
+          buoy.position.y = buoyH + 0.1
+        })
+      }
     }
   })
 
@@ -2474,9 +2502,9 @@ function update(dt) {
     } else {
       let stillInHarbour = false
       for (const island of worldObjects.islands) {
-        if (!island.mesh.userData.hasHarbor) continue
+        if (!island.mesh || !island.mesh.userData.hasHarbor) continue
         const dockWorldX = island.userData && island.userData.dockWorldX !== undefined ? island.userData.dockWorldX : (island.x + (island.mesh.userData.dockEndX || 0))
-        const dockWorldZ = island.userData && island.userData.dockWorldZ !== undefined ? island.userData.dockWorldZ : island.z
+        const dockWorldZ = island.userData && island.userData.dockWorldZ !== undefined ? island.userData.dockWorldZ : (island.z + (island.mesh.userData.dockEndZ || 0))
         const dx = playerPos.value.x - dockWorldX
         const dz = playerPos.value.z - dockWorldZ
         if (Math.sqrt(dx * dx + dz * dz) < HARBOUR_RANGE * 1.6) {
@@ -2498,8 +2526,6 @@ function update(dt) {
 
   // Direction and intensity progress linearly over long, continuous passages.
   updateWind(dt)
-
-  // Animate sails
   sailUpdateAccumulator += dt
   if (sailUpdateAccumulator >= 1 / 30) {
     animateSails(sailUpdateAccumulator)
@@ -3714,8 +3740,8 @@ function startGame() {
             </div>
           </div>
           {ui.shopMessage ? <div className="shop-message">{ui.shopMessage}</div> : null}
-          <button className="leave-btn" onClick={() => actionsRef.current.closeShop()}>Leave Port</button>
-          <div className="shop-hint">Press A to raise anchor and sail</div>
+          <button className="leave-btn" onClick={() => actionsRef.current.closeShop()}>Leave Port &amp; Raise Anchor</button>
+          <div className="shop-hint">Press A or use the button to leave and raise anchor</div>
         </div>
       ) : null}
     </div>

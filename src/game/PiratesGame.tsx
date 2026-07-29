@@ -16,6 +16,12 @@ import { createSky, updateSky, spawnIsland as buildIsland, spawnRock as buildRoc
 import { createFire as buildFire, spawnWakeParticle as emitWake, updateWakeParticles as tickWake, clearShipWakes, createCannonMuzzleFlash, updateMuzzleFlashes, clearMuzzleFlashes } from './effects'
 import { createAmbientFish, updateAmbientFish } from './ambientFish'
 import { updateShorelineFoamTime } from './terrain'
+import { initAudio, updateOceanAmbiance, playCannonSound, playImpactSound, playTreasureSound } from './audio'
+import { createSeagulls, updateSeagulls, forceSpawnSeagulls, scareSeagulls, hideSeagulls } from './seagulls'
+import { createShark, updateShark, forceSpawnShark, scareShark, hideSharks } from './sharks'
+
+let seagullsManager = null
+let sharkManager = null
 const makeRef = (value) => ({ value })
 const computed = (getter) => ({
   get value() {
@@ -153,7 +159,14 @@ let minimapUpdateAccumulator = 0
 let windUpdateAccumulator = 0
 let fishUpdateAccumulator = 0
 let sailUpdateAccumulator = 0
+let ambianceUpdateAccumulator = 0
+let wildlifeHabitatAccumulator = 0
+let wildlifeNearIsland = false
 let lastFrameTime = performance.now()
+
+// Shore distance, measured from the island radius rather than its centre.
+// Kept in one place so it is easy to tune after playtesting.
+const WILDLIFE_ISLAND_DISTANCE = 180
 
 // Computed for HUD
 const aliveEnemies = computed(() => enemyShips.value.filter(e => e.hp > 0).length)
@@ -563,6 +576,8 @@ function init() {
   oceanMesh = createOcean(scene)
   sprayPool = createSprayPool(scene)
   createWindParticles()
+  seagullsManager = createSeagulls(scene)
+  sharkManager = createShark(scene)
   spawnEnemyShip()
   window.addEventListener('resize', onResize)
   window.addEventListener('mousemove', onMouseMove)
@@ -769,7 +784,10 @@ function checkProceduralSpawns() {
     }
   }
   missingChunks.sort((a, b) => a.distSq - b.distSq)
-  for (const chunk of missingChunks.slice(0, 4)) {
+  // Terrain construction is synchronous. Building several chunks in one
+  // render frame caused the intermittent hitch seen while sailing, so stream
+  // the nearest missing chunk on each check instead.
+  for (const chunk of missingChunks.slice(0, 1)) {
     spawnChunk(chunk.cx, chunk.cz)
     spawnedChunks.add(chunk.key)
   }
@@ -1214,6 +1232,7 @@ function updateTreasure(dt) {
         const parrotBonus = 1 + playerUpgrades.value.parrot * 0.05
         const coins = Math.round(baseCoins * parrotBonus)
         gold.value += coins
+        playTreasureSound()
         showMessage(playerUpgrades.value.parrot > 0 ? `+${coins} gold (parrot +${playerUpgrades.value.parrot * 5}%)` : `+${coins} gold`, 3000)
 
         // Start fade out animation
@@ -1281,6 +1300,8 @@ function fireCannon(side) {
   const muzzleWorldPos = new THREE.Vector3()
   const muzzleDir = new THREE.Vector3()
 
+  scareAmbientWildlife()
+
   sidesToFire.forEach(sideKey => {
     const sideSign = sideKey === 'port' ? -1 : 1
     const cannonsList = playerShip && playerShip.userData && playerShip.userData[`${sideKey}Cannons`]
@@ -1308,6 +1329,7 @@ function fireCannon(side) {
 
         const speed = 42
         spawnCannonball(muzzleWorldPos, muzzleDir.clone().multiplyScalar(speed), { isPlayer: true })
+        playCannonSound(muzzleWorldPos.x, muzzleWorldPos.z, playerPos.value.x, playerPos.value.z, true)
       })
     } else {
       const numCannons = 3 + playerUpgrades.value.cannonCount * 2
@@ -1323,6 +1345,7 @@ function fireCannon(side) {
         createCannonMuzzleFlash(scene, muzzleWorldPos.clone(), muzzleDir.clone())
 
         spawnCannonball(muzzleWorldPos, muzzleDir.clone().multiplyScalar(42), { isPlayer: true })
+        playCannonSound(muzzleWorldPos.x, muzzleWorldPos.z, playerPos.value.x, playerPos.value.z, true)
       }
     }
   })
@@ -1339,6 +1362,8 @@ function fireEnemyCannon() {
 }
 
 function fireEnemyCannonMulti(enemy, shipType, enemyIndex, sideToFire) {
+  scareAmbientWildlife()
+
   const angle = enemy.angle
   const mesh = enemyShipMeshes[enemyIndex]
 
@@ -1371,6 +1396,7 @@ function fireEnemyCannonMulti(enemy, shipType, enemyIndex, sideToFire) {
           damage: shipType.cannonDamage,
           sourceIndex: enemyIndex
         })
+        playCannonSound(muzzlePos.x, muzzlePos.z, playerPos.value.x, playerPos.value.z, false)
       })
     } else {
       muzzlePos.set(enemy.x, 2.5, enemy.z)
@@ -1382,8 +1408,14 @@ function fireEnemyCannonMulti(enemy, shipType, enemyIndex, sideToFire) {
         damage: shipType.cannonDamage,
         sourceIndex: enemyIndex
       })
+      playCannonSound(muzzlePos.x, muzzlePos.z, playerPos.value.x, playerPos.value.z, false)
     }
   })
+}
+
+function scareAmbientWildlife() {
+  if (seagullsManager) scareSeagulls(seagullsManager, playerPos.value.x, playerPos.value.z)
+  if (sharkManager) scareShark(sharkManager, playerPos.value.x, playerPos.value.z)
 }
 
 function updateCannonballs(dt) {
@@ -1421,6 +1453,7 @@ function updateCannonballs(dt) {
         if (dx * dx + dz * dz < hitDist * hitDist) {
           const damage = ball.damage || 10
           enemy.hp -= damage
+          playImpactSound(ball.mesh.position.x, ball.mesh.position.z, playerPos.value.x, playerPos.value.z)
 
           if (ball.isPlayer) {
             showMessage(`Hit ${shipType.name}`)
@@ -1442,6 +1475,7 @@ function updateCannonballs(dt) {
       const dz = ball.mesh.position.z - kraken.value.z
       if (dx * dx + dz * dz < 100) {
         kraken.value.hp -= 5
+        playImpactSound(ball.mesh.position.x, ball.mesh.position.z, playerPos.value.x, playerPos.value.z)
         showMessage('Hit the Kraken!')
         if (kraken.value.hp <= 0) {
           victory.value = true
@@ -1461,6 +1495,7 @@ function updateCannonballs(dt) {
       if (pdx * pdx + pdz * pdz < 9) {
         const damage = ball.damage || 10
         hp.value -= damage
+        playImpactSound(ball.mesh.position.x, ball.mesh.position.z, playerPos.value.x, playerPos.value.z)
         showMessage('You were hit!')
         removeCannonballAt(i)
         if (hp.value <= 0) {
@@ -1502,7 +1537,10 @@ function updateCannonballs(dt) {
         if (hitTerrain) break
       }
     }
-    if (hitTerrain) removeCannonballAt(i)
+    if (hitTerrain) {
+      playImpactSound(ball.mesh.position.x, ball.mesh.position.z, playerPos.value.x, playerPos.value.z)
+      removeCannonballAt(i)
+    }
   }
 }
 
@@ -1595,17 +1633,42 @@ function onWheel(e) {
 }
 
 function onKeyDown(e) {
+  initAudio()
+
+  const key = e.key ? e.key.toLowerCase() : ''
+  const code = e.code ? e.code.toLowerCase() : ''
+
+  // G key - summon a seagull encounter and demonstrate a sail landing
+  if (key === 'g' || code === 'keyg') {
+    if (seagullsManager) {
+      if (sharkManager) hideSharks(sharkManager)
+      forceSpawnSeagulls(seagullsManager, playerShip, playerPos.value.x, playerPos.value.z)
+      showMessage('🕊️ Seagull encounter summoned!', 2500)
+    }
+    return
+  }
+
+  // H key - summon rare surface-skimming shark
+  if (key === 'h' || code === 'keyh') {
+    if (sharkManager) {
+      if (seagullsManager) hideSeagulls(seagullsManager)
+      forceSpawnShark(sharkManager, playerPos.value.x, playerPos.value.z, playerAngle)
+      showMessage('🦈 Shark encounter summoned!', 2500)
+    }
+    return
+  }
+
   if (gameState.value !== 'playing') return
   if (shopOpen.value) return
   if (anchorAnimating) return
 
-  if (e.key === 'b' || e.key === 'B') {
+  if (key === 'b' || code === 'keyb') {
     brakeHeld = true
     return
   }
 
   // A key - toggle anchor
-  if (e.key === 'a' || e.key === 'A') {
+  if (key === 'a' || code === 'keya') {
     anchorAnimating = true
 
     if (!anchorDropped) {
@@ -2291,6 +2354,61 @@ function update(dt) {
   if (fishMesh && fishUpdateAccumulator >= 1 / 30) {
     updateAmbientFish(fishMesh, fishUpdateAccumulator, oceanTime, playerPos.value.x, playerPos.value.z)
     fishUpdateAccumulator = 0
+  }
+
+  wildlifeHabitatAccumulator += dt
+  if (wildlifeHabitatAccumulator >= 0.5) {
+    wildlifeHabitatAccumulator = 0
+    let nearestShoreDistance = Infinity
+    const measureIsland = island => {
+      if (!island) return
+      const dx = playerPos.value.x - island.x
+      const dz = playerPos.value.z - island.z
+      nearestShoreDistance = Math.min(nearestShoreDistance, Math.max(0, Math.hypot(dx, dz) - (island.radius || 0)))
+    }
+    islands.forEach(measureIsland)
+    worldObjects.islands.forEach(measureIsland)
+    wildlifeNearIsland = nearestShoreDistance <= WILDLIFE_ISLAND_DISTANCE
+  }
+
+  // Advance exactly one habitat timer. An encounter that has already started
+  // is allowed to finish even if the player crosses the habitat boundary.
+  const updateBirds = gameState.value === 'playing' && seagullsManager && playerShip &&
+    (seagullsManager.active || (!sharkManager?.active && wildlifeNearIsland))
+  const updateSharks = gameState.value === 'playing' && sharkManager &&
+    (sharkManager.active || (!seagullsManager?.active && !wildlifeNearIsland))
+
+  if (updateBirds) {
+    updateSeagulls(
+      seagullsManager,
+      dt,
+      oceanTime,
+      playerShip,
+      playerPos.value.x,
+      playerPos.value.z
+    )
+  } else if (updateSharks) {
+    updateShark(
+      sharkManager,
+      dt,
+      oceanTime,
+      playerPos.value.x,
+      playerPos.value.z,
+      windAngle,
+      windSpeed.value
+    )
+    sharkManager.sharks.forEach((shark, index) => {
+      if (shark.state !== 'HIDDEN' && !shark.isDiving) {
+        emitWake(scene, `ambient_shark_${index}`, shark.x, shark.z, shark.angle, shark.speed, 0.5)
+      }
+    })
+  }
+
+  // Web Audio parameter updates do not need render-frame frequency.
+  ambianceUpdateAccumulator += dt
+  if (ambianceUpdateAccumulator >= 0.1) {
+    updateOceanAmbiance(playerSpeed.value)
+    ambianceUpdateAccumulator = 0
   }
 
   minimapUpdateAccumulator += dt
@@ -3227,6 +3345,10 @@ function animate(now = performance.now()) {
 }
 
 function startGame() {
+  // The Start button is a user gesture, so it is the most reliable place to
+  // unlock browser audio and begin the ocean bed.
+  initAudio()
+
   // Exit pointer lock if active
   if (document.pointerLockElement) {
     document.exitPointerLock()
@@ -3299,6 +3421,8 @@ function startGame() {
   windUpdateAccumulator = 0
   fishUpdateAccumulator = 0
   sailUpdateAccumulator = 0
+  ambianceUpdateAccumulator = 0
+  wildlifeHabitatAccumulator = 0
   lastFrameTime = performance.now()
 
   // Clear fire effects
